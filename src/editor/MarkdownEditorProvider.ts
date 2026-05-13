@@ -403,7 +403,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.imageResize.skipWarning') ||
         e.affectsConfiguration('markdownForHumans.imagePath') ||
         e.affectsConfiguration('markdownForHumans.imagePathBase') ||
-        e.affectsConfiguration('markdownForHumans.imagePreview.hover.enabled')
+        e.affectsConfiguration('markdownForHumans.imagePreview.hover.enabled') ||
+        e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
+        e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
+        e.affectsConfiguration('markdownForHumans.zoom')
       ) {
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
@@ -416,12 +419,24 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           'markdownForHumans.imagePreview.hover.enabled',
           true
         );
+        const paragraphSpacingBefore = config.get<number>(
+          'markdownForHumans.paragraph.spacingBefore',
+          0
+        );
+        const paragraphSpacingAfter = config.get<number>(
+          'markdownForHumans.paragraph.spacingAfter',
+          0
+        );
+        const zoom = config.get<number>('markdownForHumans.zoom', 100);
         webviewPanel.webview.postMessage({
           type: 'settingsUpdate',
           skipResizeWarning: skipWarning,
           imagePath: imagePath,
           imagePathBase: imagePathBase,
           showImageHoverOverlay: showImageHoverOverlay,
+          paragraphSpacingBefore: paragraphSpacingBefore,
+          paragraphSpacingAfter: paragraphSpacingAfter,
+          zoom: zoom,
         });
       }
     });
@@ -487,6 +502,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       'markdownForHumans.imagePreview.hover.enabled',
       true
     );
+    const paragraphSpacingBefore = config.get<number>(
+      'markdownForHumans.paragraph.spacingBefore',
+      0
+    );
+    const paragraphSpacingAfter = config.get<number>('markdownForHumans.paragraph.spacingAfter', 0);
+    const zoom = config.get<number>('markdownForHumans.zoom', 100);
 
     webview.postMessage({
       type: 'update',
@@ -495,6 +516,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       imagePath: imagePath,
       imagePathBase: imagePathBase,
       showImageHoverOverlay: showImageHoverOverlay,
+      paragraphSpacingBefore: paragraphSpacingBefore,
+      paragraphSpacingAfter: paragraphSpacingAfter,
+      zoom: zoom,
     });
   }
 
@@ -530,12 +554,24 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           'markdownForHumans.imagePreview.hover.enabled',
           true
         );
+        const paragraphSpacingBefore = config.get<number>(
+          'markdownForHumans.paragraph.spacingBefore',
+          0
+        );
+        const paragraphSpacingAfter = config.get<number>(
+          'markdownForHumans.paragraph.spacingAfter',
+          0
+        );
+        const zoom = config.get<number>('markdownForHumans.zoom', 100);
         webview.postMessage({
           type: 'settingsUpdate',
           skipResizeWarning: skipWarning,
           imagePath: imagePath,
           imagePathBase: imagePathBase,
           showImageHoverOverlay: showImageHoverOverlay,
+          paragraphSpacingBefore: paragraphSpacingBefore,
+          paragraphSpacingAfter: paragraphSpacingAfter,
+          zoom: zoom,
         });
         break;
       }
@@ -1140,19 +1176,34 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   /**
-   * Check if source is within workspace/document directory (cross-platform)
+   * Check if source is within workspace/document directory (cross-platform).
+   * Thin wrapper over the exported `isPathContainedWithin` helper.
    */
   private isWithinWorkspace(sourcePath: string, basePath: string): boolean {
-    const normalizedSource = path.normalize(sourcePath);
-    const normalizedBase = path.normalize(basePath);
+    return isPathContainedWithin(sourcePath, basePath);
+  }
 
-    // On Windows, ensure case-insensitive comparison
-    // On Mac/Linux, case-sensitive comparison
-    const sourceLower =
-      process.platform === 'win32' ? normalizedSource.toLowerCase() : normalizedSource;
-    const baseLower = process.platform === 'win32' ? normalizedBase.toLowerCase() : normalizedBase;
-
-    return sourceLower.startsWith(baseLower + path.sep) || sourceLower === baseLower;
+  /**
+   * Build the list of allowed roots a file-mutating handler may write to,
+   * for the given document. Used by handleRenameImage / handleResizeImage
+   * to reject paths that escape via `../` from a hostile markdown image
+   * src (see SECURITY review §H1, §H2).
+   */
+  private getAllowedFileRoots(document: vscode.TextDocument): string[] {
+    const roots: string[] = [];
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    if (workspaceFolder) {
+      roots.push(workspaceFolder.uri.fsPath);
+    }
+    if (document.uri.scheme === 'file') {
+      roots.push(path.dirname(document.uri.fsPath));
+    }
+    const imageBase = this.getImageBasePath(document);
+    if (imageBase) {
+      roots.push(imageBase);
+    }
+    // De-dupe
+    return Array.from(new Set(roots));
   }
 
   /**
@@ -1343,6 +1394,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       return;
     }
     const imagesDir = path.join(saveBasePath, imageFolderName);
+    if (!isPathContainedWithin(imagesDir, saveBasePath)) {
+      const errorMessage = `Refusing to save image outside the base directory: ${imageFolderName}`;
+      vscode.window.showErrorMessage(errorMessage);
+      webview.postMessage({ type: 'imageError', placeholderId, error: errorMessage });
+      return;
+    }
 
     console.warn(`[MD4H] Saving image "${name}" to folder: ${imagesDir}`);
 
@@ -1351,11 +1408,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(imagesDir));
 
       // Save image (collision-safe: never overwrite silently)
-      const parsedName = path.parse(name);
+      const safeName = path.basename(name) || 'image';
+      const parsedName = path.parse(safeName);
       const baseFilename = parsedName.name || 'image';
       const extension = parsedName.ext || '';
 
-      let finalFilename = name;
+      let finalFilename = safeName;
       let imagePath = path.join(imagesDir, finalFilename);
       let imageUri = vscode.Uri.file(imagePath);
 
@@ -1465,6 +1523,34 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         imageUri = vscode.Uri.file(absolutePath);
       }
 
+      // SECURITY: gate the write target.
+      // - "Normal" path (no absolutePathFromMessage): must stay inside the
+      //   document/workspace roots. Defends against `<img src="../../etc/x">`.
+      // - "Edit in place" path (absolutePathFromMessage): if the file is
+      //   outside every allowed root, require explicit user confirmation
+      //   showing the resolved path before we write. The webview is the
+      //   only legitimate source of this message, but any extension or
+      //   misbehaving page could send it; a one-click confirm makes the
+      //   destination visible.
+      // See SECURITY review §H2.
+      const allowedRoots = this.getAllowedFileRoots(document);
+      const insideAllowedRoot = allowedRoots.some(root =>
+        isPathContainedWithin(absolutePath, root)
+      );
+      if (!insideAllowedRoot) {
+        if (!absolutePathFromMessage) {
+          throw new Error(`Refusing to resize image outside the document/workspace: ${imagePath}`);
+        }
+        const choice = await vscode.window.showWarningMessage(
+          `Resize will overwrite a file outside this workspace:\n\n${absolutePath}\n\nProceed?`,
+          { modal: true },
+          'Overwrite'
+        );
+        if (choice !== 'Overwrite') {
+          throw new Error('Resize cancelled by user.');
+        }
+      }
+
       // Check if image exists
       try {
         await vscode.workspace.fs.stat(imageUri);
@@ -1560,6 +1646,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       const absoluteImagePath = path.resolve(basePath, normalizedImagePath);
       const absoluteBackupPath = path.resolve(basePath, normalizedBackupPath);
 
+      const allowedRoots = this.getAllowedFileRoots(document);
+      if (!allowedRoots.some(root => isPathContainedWithin(absoluteImagePath, root))) {
+        throw new Error(
+          `Refusing to undo resize for image outside the document/workspace: ${imagePath}`
+        );
+      }
+
       const imageUri = vscode.Uri.file(absoluteImagePath);
       const backupUri = vscode.Uri.file(absoluteBackupPath);
 
@@ -1616,6 +1709,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       }
       const normalizedPath = normalizeImagePath(imagePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
+
+      const allowedRoots = this.getAllowedFileRoots(document);
+      if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, root))) {
+        throw new Error(
+          `Refusing to redo resize for image outside the document/workspace: ${imagePath}`
+        );
+      }
+
       const imageUri = vscode.Uri.file(absolutePath);
 
       // Convert base64 to buffer
@@ -1969,6 +2070,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       const absoluteOldPath = path.resolve(basePath, normalizedOldPath);
       const oldUri = vscode.Uri.file(absoluteOldPath);
 
+      // SECURITY: reject paths that escape the document/workspace roots.
+      // Without this, a hostile markdown file could rename arbitrary files
+      // on disk (e.g. ![](../../../../etc/hosts)) on a single user click.
+      const allowedRoots = this.getAllowedFileRoots(document);
+      if (!allowedRoots.some(root => isPathContainedWithin(absoluteOldPath, root))) {
+        throw new Error(`Refusing to rename image outside the document/workspace: ${oldPath}`);
+      }
+
       // Check if old file exists
       try {
         await vscode.workspace.fs.stat(oldUri);
@@ -1987,6 +2096,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       const oldDir = path.dirname(absoluteOldPath);
       const absoluteNewPath = path.join(oldDir, newFilename);
       const newUri = vscode.Uri.file(absoluteNewPath);
+
+      // SECURITY: also confirm the destination is contained. Defends against
+      // a maliciously crafted `newName` (e.g. `../../../etc/passwd`) that
+      // would otherwise escape via the dirname join above.
+      if (!allowedRoots.some(root => isPathContainedWithin(absoluteNewPath, root))) {
+        throw new Error(
+          `Refusing to rename image to a path outside the document/workspace: ${newFilename}`
+        );
+      }
 
       // Check if new file already exists
       let targetExists = false;
@@ -2809,6 +2927,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         return;
       }
       const imagesDir = path.join(saveBasePath, targetFolder);
+      if (!isPathContainedWithin(imagesDir, saveBasePath)) {
+        const errorMessage = `Refusing to copy image outside the base directory: ${targetFolder}`;
+        vscode.window.showErrorMessage(errorMessage);
+        webview.postMessage({ type: 'localImageCopyError', placeholderId, error: errorMessage });
+        return;
+      }
 
       // Create folder if needed
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(imagesDir));
@@ -3121,4 +3245,45 @@ export function normalizeImagePath(imagePath: string): string {
       }
     })
     .join('/');
+}
+
+/**
+ * Path-traversal defense.
+ *
+ * Returns true iff `targetAbsolutePath` is `rootAbsolutePath` itself or a
+ * descendant of it. Used by the file-mutating message handlers (rename,
+ * resize) to reject attacker-supplied paths from a hostile markdown
+ * document — e.g. `<img src="../../../../etc/passwd">`.
+ *
+ * Both inputs MUST already be absolute. Caller is responsible for
+ * `path.resolve()` first.
+ *
+ * Notable defense: this is NOT a naive `target.startsWith(root)` check —
+ * that bug would mis-classify `/tmp/workspace-evil` as inside `/tmp/workspace`.
+ * We require either equality or `root + path.sep` as a prefix.
+ */
+export function isPathContainedWithin(
+  targetAbsolutePath: string,
+  rootAbsolutePath: string
+): boolean {
+  if (!targetAbsolutePath || !rootAbsolutePath) {
+    return false;
+  }
+  // path.resolve canonicalizes drive letters on Windows (e.g. turns the
+  // drive-relative "/workspace/docs" into "C:\workspace\docs"), so both
+  // target and root end up on the same drive before comparison.
+  const normalizedTarget = path.resolve(targetAbsolutePath);
+  const normalizedRoot = path.resolve(rootAbsolutePath);
+
+  // Strip trailing separator from root (path.normalize keeps "/" for "/")
+  const rootNoSep =
+    normalizedRoot.length > 1 && normalizedRoot.endsWith(path.sep)
+      ? normalizedRoot.slice(0, -1)
+      : normalizedRoot;
+
+  // Case-insensitive on Windows; case-sensitive on macOS / Linux
+  const target = process.platform === 'win32' ? normalizedTarget.toLowerCase() : normalizedTarget;
+  const root = process.platform === 'win32' ? rootNoSep.toLowerCase() : rootNoSep;
+
+  return target === root || target.startsWith(root + path.sep);
 }
