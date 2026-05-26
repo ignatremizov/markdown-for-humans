@@ -210,6 +210,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       paragraphSpacingBefore: 0,
       paragraphSpacingAfter: 0,
       zoom: 100,
+      editorTheme: 'vscode',
     });
   });
 
@@ -253,6 +254,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       paragraphSpacingBefore: 0,
       paragraphSpacingAfter: 0,
       zoom: 100,
+      editorTheme: 'vscode',
     });
 
     getConfigurationSpy.mockRestore();

@@ -233,6 +233,22 @@
           "maximum": 200,
           "description": "Zoom level for the editor as a percentage. 100 = default size, 150 = 50% larger, etc.",
           "scope": "application"
+        },
+        "markdownForHumans.display.editorTheme": {
+          "type": "string",
+          "enum": [
+            "vscode",
+            "defaultLight",
+            "defaultDark"
+          ],
+          "enumDescriptions": [
+            "Follow VS Code theme",
+            "Always use the default light theme",
+            "Always use the default dark theme"
+          ],
+          "default": "vscode",
+          "description": "Controls the editor's color theme. 'Follow VS Code theme' mirrors your active VS Code theme; the other options render the editor in a fixed light or dark theme regardless of VS Code. The toolbar theme toggle switches between the fixed light and dark themes and applies to all open editors.",
+          "scope": "application"
         }
       }
     }

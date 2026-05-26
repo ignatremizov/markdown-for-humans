@@ -17,6 +17,7 @@ import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
 import { buildResizeBackupLocation, resolveBackupPathWithCollisionDetection } from './imageBackups';
 import { hasSameBlankLineLayout, isMarkdownStructurallyEquivalent } from './markdownAstEquivalence';
 import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePolicy';
+import { resolveToggleTarget, type EditorThemeSetting } from '../shared/editorTheme';
 
 /**
  * Coerce text to end with exactly one `\n` (markdownlint MD047). An empty
@@ -163,6 +164,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const config = vscode.workspace.getConfiguration();
     const value = config.get<string>('markdownForHumans.blankLines.mode', 'strip');
     return value === 'preserve' ? 'preserve' : 'strip';
+  }
+
+  private getEditorTheme(): EditorThemeSetting {
+    const config = vscode.workspace.getConfiguration();
+    const value = config.get<string>('markdownForHumans.display.editorTheme', 'vscode');
+    return value === 'defaultLight' || value === 'defaultDark' ? value : 'vscode';
   }
 
   private async syncMarkdownlintMd012(mode: BlankLineMode): Promise<void> {
@@ -510,7 +517,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.blankLines.mode') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
-        e.affectsConfiguration('markdownForHumans.zoom')
+        e.affectsConfiguration('markdownForHumans.zoom') ||
+        e.affectsConfiguration('markdownForHumans.display.editorTheme')
       ) {
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
@@ -537,6 +545,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
+        const editorTheme = this.getEditorTheme();
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
           void this.syncMarkdownlintMd012(blankLineMode).catch(error => {
             console.warn('[MD4H] Failed syncing markdownlint MD012 rule:', error);
@@ -562,6 +571,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
           blankLineMode,
+          editorTheme,
         });
       }
     });
@@ -659,6 +669,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const paragraphSpacingAfter = config.get<number>('markdownForHumans.paragraph.spacingAfter', 0);
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
     const blankLineMode = this.getBlankLineMode();
+    const editorTheme = this.getEditorTheme();
 
     webview.postMessage({
       type: 'update',
@@ -672,6 +683,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       paragraphSpacingAfter: paragraphSpacingAfter,
       zoom: zoom,
       blankLineMode,
+      editorTheme,
     });
   }
 
@@ -748,6 +760,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
+        const editorTheme = this.getEditorTheme();
         webview.postMessage({
           type: 'settingsUpdate',
           skipResizeWarning: skipWarning,
@@ -759,6 +772,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
           blankLineMode,
+          editorTheme,
         });
         break;
       }
@@ -795,6 +809,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           'workbench.action.openSettings',
           '@ext:concretio.markdown-for-humans'
         );
+        break;
+      case 'toggleTheme':
+        void this.handleToggleTheme();
         break;
       case 'exportDocument':
         this.handleExportDocument(message, document);
@@ -3225,6 +3242,28 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   /**
    * Handle setting update request from webview
    */
+  /**
+   * Toggle button: write the opposite of the currently effective appearance to
+   * the global `editorTheme` setting. The write fires each open panel's own
+   * `onDidChangeConfiguration` subscription, so every editor re-themes at once.
+   */
+  private async handleToggleTheme(): Promise<void> {
+    try {
+      const current = this.getEditorTheme();
+      const kind = vscode.window.activeColorTheme.kind as number;
+      const target = resolveToggleTarget(current, kind);
+      const config = vscode.workspace.getConfiguration();
+      await config.update(
+        'markdownForHumans.display.editorTheme',
+        target,
+        vscode.ConfigurationTarget.Global
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[MD4H] Failed to toggle editor theme: ${errorMessage}`);
+    }
+  }
+
   private async handleUpdateSetting(
     message: { type: string; [key: string]: unknown },
     webview: vscode.Webview

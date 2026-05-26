@@ -4,7 +4,7 @@
 
 - **Task name:** Editor Theme Override
 - **Slug:** editor-theme-override
-- **Status:** planned
+- **Status:** in-progress
 - **Created:** 2026-05-26
 - **Last updated:** 2026-05-26
 - **Shipped:** _(pending)_
@@ -129,7 +129,24 @@
 
 ## 7. Implementation Log
 
-_(Fill in as you implement.)_
+### 2026-05-26 - Feature implemented (TDD)
+
+- **What:** Built the setting, toolbar toggle, and forced palettes end to end.
+- **Files:**
+  - `src/shared/editorTheme.ts` (new) - pure helpers `appearanceFromKind`, `effectiveAppearance`, `resolveToggleTarget`, `forcedThemeClass`.
+  - `src/__tests__/editor/editorTheme.test.ts` (new) - 15 unit tests (written first; watched red then green).
+  - `package.json` - `markdownForHumans.display.editorTheme` enum (scope: application).
+  - `src/editor/MarkdownEditorProvider.ts` - `getEditorTheme()`, `editorTheme` in update/ready/settingsUpdate payloads, config watch, `toggleTheme` -> `handleToggleTheme()` writing the opposite to global config.
+  - `src/webview/BubbleMenuView.ts` - `color-mode` toggle button after the gear.
+  - `src/webview/editor.ts` - `toggleTheme` event bridge + `applyThemeOverride()` wired into `applyEditorSettings`.
+  - `src/webview/editor.css` - `.mdfh-force-light` / `.mdfh-force-dark` palettes overriding the `--vscode-*` tokens; dark syntax-highlight selectors guarded with `:not(.mdfh-force-light)` and given `.mdfh-force-dark` alternates.
+  - `src/__tests__/editor/undoSync.test.ts` - updated two payload assertions for the new `editorTheme` field.
+  - `scripts/verify-build.js` - added `toggleTheme` and `.mdfh-force-dark` as tree-shake guards.
+- **Notes:**
+  - Per-panel `onDidChangeConfiguration` means a single global config write re-themes every open editor with no extra broadcast code.
+  - Verified: 873 tests pass, `npm run build:release` + `verify-build` pass (7/7, 6/6, 4/4 features).
+  - Pre-existing repo state: the Windows checkout is CRLF (`core.autocrlf=true`) while prettier expects LF, so `npm run lint` reports CRLF errors across all files (not introduced here). Git normalizes to LF on commit. No non-CRLF lint issues in the changed files.
+- **Remaining:** manual verification in the Extension Development Host (the webview/provider are excluded from unit coverage by design) and a screen recording for the PR per CONTRIBUTING.
 
 ---
 

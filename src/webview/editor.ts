@@ -33,6 +33,7 @@ import { DocumentAuditExtension } from './features/auditDocument';
 import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
 import type { BlankLineMode } from '../shared/blankLinePolicy';
+import { forcedThemeClass, type EditorThemeSetting } from '../shared/editorTheme';
 import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
 import {
   setupImageDragDrop,
@@ -1751,6 +1752,13 @@ window.addEventListener('openExtensionSettings', () => {
   vscode.postMessage({ type: 'openExtensionSettings' });
 });
 
+// Handle theme toggle button from toolbar -> flip the global editorTheme setting.
+// The extension computes the opposite of the currently effective theme and
+// writes it back, which re-themes every open editor via settingsUpdate.
+window.addEventListener('toggleTheme', () => {
+  vscode.postMessage({ type: 'toggleTheme' });
+});
+
 // Zoom: applies zoom level from markdownForHumans.zoom setting (percentage, 100 = default).
 // We use a CSS calc() expression so the override stays live — if the user later changes
 // their VS Code editor font size, --md-base-size-override recomputes automatically
@@ -1766,9 +1774,21 @@ function applyZoomLevel(percent: number) {
     );
   }
 }
+// Forces the editor into a fixed light/dark palette regardless of the active
+// VS Code theme by toggling a body class that overrides the --vscode-* tokens
+// the editor consumes (see editor.css). 'vscode' applies no class so VS Code's
+// own theme drives the appearance, exactly as before this setting existed.
+function applyThemeOverride(setting: EditorThemeSetting) {
+  const forced = forcedThemeClass(setting);
+  document.body.classList.remove('mdfh-force-light', 'mdfh-force-dark');
+  if (forced) {
+    document.body.classList.add(forced);
+  }
+}
+
 /**
- * Applies paragraph spacing and zoom settings from an incoming message.
- * Called from both the `update` and `settingsUpdate` handlers.
+ * Applies paragraph spacing, zoom, and theme-override settings from an incoming
+ * message. Called from both the `update` and `settingsUpdate` handlers.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyEditorSettings(message: Record<string, any>) {
@@ -1786,6 +1806,13 @@ function applyEditorSettings(message: Record<string, any>) {
   }
   if (typeof message.zoom === 'number') {
     applyZoomLevel(message.zoom);
+  }
+  if (
+    message.editorTheme === 'vscode' ||
+    message.editorTheme === 'defaultLight' ||
+    message.editorTheme === 'defaultDark'
+  ) {
+    applyThemeOverride(message.editorTheme);
   }
 }
 
