@@ -168,6 +168,14 @@ Customize the editor behavior through VS Code settings. Access via `Ctrl+,` (Set
 - **`markdownForHumans.chromePath`** (default: `""`)
   - Path to Google Chrome or Chromium executable for PDF export. Leave empty to auto-detect.
 
+### Display Settings
+
+- **`markdownForHumans.display.editorTheme`** (default: `"vscode"`)
+  - Controls the editor's color theme independently of the rest of VS Code.
+  - `Follow VS Code theme` mirrors your active VS Code theme (default).
+  - `Always use the default light theme` / `Always use the default dark theme` render the editor in a fixed light or dark theme regardless of VS Code.
+  - The light/dark toggle button at the end of the editor toolbar switches between the fixed light and dark themes and applies to all open editors.
+
 ---
 
 ## More Features
