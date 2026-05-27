@@ -173,8 +173,8 @@ Customize the editor behavior through VS Code settings. Access via `Ctrl+,` (Set
 - **`markdownForHumans.display.editorTheme`** (default: `"vscode"`)
   - Controls the editor's color theme independently of the rest of VS Code.
   - `Follow VS Code theme` mirrors your active VS Code theme (default).
-  - `Always use the default light theme` / `Always use the default dark theme` render the editor in a fixed light or dark theme regardless of VS Code.
-  - The light/dark toggle button at the end of the editor toolbar switches between the fixed light and dark themes and applies to all open editors.
+  - `Always use a light theme` / `Always use a dark theme` keep the editor light or dark regardless of VS Code. When your active VS Code theme already matches the chosen appearance the editor uses that real theme; otherwise it falls back to a built-in light or dark theme.
+  - The light/dark toggle button at the end of the editor toolbar switches between light and dark and applies to all open editors.
 
 ---
 

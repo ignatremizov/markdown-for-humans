@@ -61,6 +61,16 @@
     --vscode-editor-findMatchBackground: #a8ac94;
     --vscode-editor-findMatchHighlightBackground: rgba(234, 92, 0, 0.33);
     color-scheme: light;
+    background-color: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+  }
+
+  /* Root (overscroll/page) background. Uses a literal color, not the variable,
+     because VS Code sets --vscode-* inline on <html>, so a class rule can only
+     override the background property there, not the variables. */
+  html.mdfh-force-light {
+    background-color: #ffffff;
+    color-scheme: light;
   }
 
   body.mdfh-force-dark {
@@ -112,6 +122,13 @@
     --vscode-terminal-ansiRed: #f14c4c;
     --vscode-editor-findMatchBackground: #9e6a03;
     --vscode-editor-findMatchHighlightBackground: rgba(234, 92, 0, 0.33);
+    color-scheme: dark;
+    background-color: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+  }
+
+  html.mdfh-force-dark {
+    background-color: #1f1f1f;
     color-scheme: dark;
   }
 

@@ -17,7 +17,11 @@ import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
 import { buildResizeBackupLocation, resolveBackupPathWithCollisionDetection } from './imageBackups';
 import { hasSameBlankLineLayout, isMarkdownStructurallyEquivalent } from './markdownAstEquivalence';
 import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePolicy';
-import { resolveToggleTarget, type EditorThemeSetting } from '../shared/editorTheme';
+import {
+  appearanceFromKind,
+  resolveToggleTarget,
+  type EditorThemeSetting,
+} from '../shared/editorTheme';
 
 /**
  * Coerce text to end with exactly one `\n` (markdownlint MD047). An empty
@@ -170,6 +174,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const config = vscode.workspace.getConfiguration();
     const value = config.get<string>('markdownForHumans.display.editorTheme', 'vscode');
     return value === 'defaultLight' || value === 'defaultDark' ? value : 'vscode';
+  }
+
+  /** Whether VS Code's active color theme is a dark variant (incl. high contrast). */
+  private isVscodeDark(): boolean {
+    const kind = vscode.window.activeColorTheme?.kind;
+    return typeof kind === 'number' ? appearanceFromKind(kind) === 'dark' : false;
   }
 
   private async syncMarkdownlintMd012(mode: BlankLineMode): Promise<void> {
@@ -546,6 +556,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
         const editorTheme = this.getEditorTheme();
+        const vscodeIsDark = this.isVscodeDark();
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
           void this.syncMarkdownlintMd012(blankLineMode).catch(error => {
             console.warn('[MD4H] Failed syncing markdownlint MD012 rule:', error);
@@ -572,8 +583,22 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           zoom: zoom,
           blankLineMode,
           editorTheme,
+          vscodeIsDark,
         });
       }
+    });
+
+    // When VS Code's active color theme changes, re-send the theme settings so
+    // the webview can re-evaluate the override. This matters for the "inherit
+    // when the active appearance matches" behavior: e.g. an editor set to
+    // "Always dark" that was inheriting a live dark theme must switch to the
+    // synthetic dark palette if the user flips VS Code to a light theme.
+    const themeChangeSubscription = vscode.window.onDidChangeActiveColorTheme(() => {
+      webviewPanel.webview.postMessage({
+        type: 'settingsUpdate',
+        editorTheme: this.getEditorTheme(),
+        vscodeIsDark: this.isVscodeDark(),
+      });
     });
 
     webviewPanel.onDidChangeViewState(() => {
@@ -602,6 +627,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     webviewPanel.onDidDispose(() => {
       changeDocumentSubscription.dispose();
       configChangeSubscription.dispose();
+      themeChangeSubscription.dispose();
       // Clean up pending edits tracking for this document
       const docUri = document.uri.toString();
       this.pendingEdits.delete(docUri);
@@ -684,6 +710,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       zoom: zoom,
       blankLineMode,
       editorTheme,
+      vscodeIsDark: this.isVscodeDark(),
     });
   }
 
@@ -773,6 +800,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           zoom: zoom,
           blankLineMode,
           editorTheme,
+          vscodeIsDark: this.isVscodeDark(),
         });
         break;
       }

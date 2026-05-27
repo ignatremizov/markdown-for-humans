@@ -33,7 +33,7 @@ import { DocumentAuditExtension } from './features/auditDocument';
 import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
 import type { BlankLineMode } from '../shared/blankLinePolicy';
-import { forcedThemeClass, type EditorThemeSetting } from '../shared/editorTheme';
+import { overrideClassFor, type EditorThemeSetting } from '../shared/editorTheme';
 import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
 import {
   setupImageDragDrop,
@@ -1774,16 +1774,59 @@ function applyZoomLevel(percent: number) {
     );
   }
 }
-// Forces the editor into a fixed light/dark palette regardless of the active
-// VS Code theme by toggling a body class that overrides the --vscode-* tokens
-// the editor consumes (see editor.css). 'vscode' applies no class so VS Code's
-// own theme drives the appearance, exactly as before this setting existed.
-function applyThemeOverride(setting: EditorThemeSetting) {
-  const forced = forcedThemeClass(setting);
-  document.body.classList.remove('mdfh-force-light', 'mdfh-force-dark');
-  if (forced) {
-    document.body.classList.add(forced);
+// Editor theme override.
+//
+// When the requested direction already matches VS Code's active appearance, no
+// class is added and the editor inherits the real live theme (so "Always dark"
+// on a dark VS Code looks exactly like the user's actual dark theme); the
+// synthetic palette is applied only when forcing the opposite direction.
+// 'vscode' always inherits.
+//
+// The class goes on BOTH <html> and <body>:
+//  - <body> carries the --vscode-* variable overrides (they win there via
+//    inheritance; VS Code sets those vars inline on <html>, so a class rule on
+//    <html> could not override them) and satisfies the syntax-highlight guards
+//    (.vscode-dark:not(.mdfh-force-light)) that key off the body class.
+//  - <html> paints the overscroll/page background with a literal color so the
+//    area around the editor matches (see editor.css).
+//
+// Self-healing: VS Code reassigns body.className (not classList.add) during its
+// theme handshake, which can wipe our class right after the first apply. A
+// MutationObserver re-asserts the desired state whenever the class attribute
+// changes. reconcile only mutates when out of sync, so it settles in one pass
+// and cannot loop.
+let lastThemeSetting: EditorThemeSetting = 'vscode';
+let lastVscodeIsDark = false;
+let themeClassObserver: MutationObserver | null = null;
+
+function reconcileThemeClasses() {
+  const forced = overrideClassFor(lastThemeSetting, lastVscodeIsDark);
+  for (const el of [document.documentElement, document.body]) {
+    if (!el) continue;
+    const wantLight = forced === 'mdfh-force-light';
+    const wantDark = forced === 'mdfh-force-dark';
+    if (el.classList.contains('mdfh-force-light') !== wantLight) {
+      el.classList.toggle('mdfh-force-light', wantLight);
+    }
+    if (el.classList.contains('mdfh-force-dark') !== wantDark) {
+      el.classList.toggle('mdfh-force-dark', wantDark);
+    }
   }
+}
+
+function ensureThemeClassObserver() {
+  if (themeClassObserver) return;
+  themeClassObserver = new MutationObserver(() => reconcileThemeClasses());
+  const opts: MutationObserverInit = { attributes: true, attributeFilter: ['class'] };
+  themeClassObserver.observe(document.documentElement, opts);
+  themeClassObserver.observe(document.body, opts);
+}
+
+function applyThemeOverride(setting: EditorThemeSetting, vscodeIsDark: boolean) {
+  lastThemeSetting = setting;
+  lastVscodeIsDark = vscodeIsDark;
+  reconcileThemeClasses();
+  ensureThemeClassObserver();
 }
 
 /**
@@ -1812,7 +1855,14 @@ function applyEditorSettings(message: Record<string, any>) {
     message.editorTheme === 'defaultLight' ||
     message.editorTheme === 'defaultDark'
   ) {
-    applyThemeOverride(message.editorTheme);
+    // The extension reports VS Code's current appearance; fall back to the body
+    // class if an older message omits it.
+    const vscodeIsDark =
+      typeof message.vscodeIsDark === 'boolean'
+        ? message.vscodeIsDark
+        : document.body.classList.contains('vscode-dark') ||
+          document.body.classList.contains('vscode-high-contrast');
+    applyThemeOverride(message.editorTheme, vscodeIsDark);
   }
 }
 

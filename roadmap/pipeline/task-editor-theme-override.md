@@ -148,6 +148,16 @@
   - Pre-existing repo state: the Windows checkout is CRLF (`core.autocrlf=true`) while prettier expects LF, so `npm run lint` reports CRLF errors across all files (not introduced here). Git normalizes to LF on commit. No non-CRLF lint issues in the changed files.
 - **Remaining:** manual verification in the Extension Development Host (the webview/provider are excluded from unit coverage by design) and a screen recording for the PR per CONTRIBUTING.
 
+### 2026-05-27 - Refinements from local VSIX testing
+
+Three issues surfaced while testing packaged builds; each was root-caused and fixed:
+
+- **Container/background frame:** the forced palette only set `--vscode-*` on `body`, so the page root and body element backgrounds stayed on the real theme, leaving a mismatched frame around the editor. Fixed by giving `body.mdfh-force-*` an explicit forced `background-color` and adding `html.mdfh-force-*` blocks with a literal page-background color for the overscroll area.
+- **Inherit the real theme:** forcing dark always used the synthetic `#1f1f1f` palette even when the user's VS Code dark theme differed. Replaced `forcedThemeClass(setting)` with `overrideClassFor(setting, vscodeIsDark)`: when the requested direction already matches VS Code's active appearance we apply no override (inherit the live theme); the synthetic palette is used only when forcing the opposite. The provider now reports `vscodeIsDark` (via `appearanceFromKind(activeColorTheme.kind)`) in the payloads and re-broadcasts on `onDidChangeActiveColorTheme` so the decision stays live.
+- **First-load race (needed a second reload):** VS Code reassigns `body.className` during its theme handshake, wiping our class right after the first apply. Made the override self-healing with a `MutationObserver` on the `class` attribute of `html`/`body` that re-asserts the desired state (reconcile only mutates when out of sync, so it settles in one pass).
+
+Test suite updated accordingly (now 875 passing): `overrideClassFor` replaces `forcedThemeClass` in tests; the `vscode` mock and the `inMemoryFiles` inline mock gained `activeColorTheme` + `onDidChangeActiveColorTheme`; `undoSync` payload assertions include `vscodeIsDark`.
+
 ---
 
 ## 8. Decisions & Tradeoffs

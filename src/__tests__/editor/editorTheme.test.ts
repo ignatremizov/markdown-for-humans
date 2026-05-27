@@ -1,7 +1,7 @@
 import {
   appearanceFromKind,
   effectiveAppearance,
-  forcedThemeClass,
+  overrideClassFor,
   resolveToggleTarget,
 } from '../../shared/editorTheme';
 
@@ -67,16 +67,25 @@ describe('resolveToggleTarget', () => {
   });
 });
 
-describe('forcedThemeClass', () => {
+describe('overrideClassFor', () => {
   it('applies no override class when following VS Code', () => {
-    expect(forcedThemeClass('vscode')).toBeNull();
+    expect(overrideClassFor('vscode', true)).toBeNull();
+    expect(overrideClassFor('vscode', false)).toBeNull();
   });
 
-  it('applies the forced-light class when the setting is "defaultLight"', () => {
-    expect(forcedThemeClass('defaultLight')).toBe('mdfh-force-light');
+  it('inherits the live theme when forcing dark and VS Code is already dark', () => {
+    expect(overrideClassFor('defaultDark', true)).toBeNull();
   });
 
-  it('applies the forced-dark class when the setting is "defaultDark"', () => {
-    expect(forcedThemeClass('defaultDark')).toBe('mdfh-force-dark');
+  it('inherits the live theme when forcing light and VS Code is already light', () => {
+    expect(overrideClassFor('defaultLight', false)).toBeNull();
+  });
+
+  it('applies the synthetic dark palette when forcing dark over a light VS Code', () => {
+    expect(overrideClassFor('defaultDark', false)).toBe('mdfh-force-dark');
+  });
+
+  it('applies the synthetic light palette when forcing light over a dark VS Code', () => {
+    expect(overrideClassFor('defaultLight', true)).toBe('mdfh-force-light');
   });
 });

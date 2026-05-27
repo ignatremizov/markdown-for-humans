@@ -43,12 +43,21 @@ export function resolveToggleTarget(setting: EditorThemeSetting, vscodeKind: num
 }
 
 /**
- * The body class the webview applies for a given setting, or `null` to follow
- * VS Code's own theme (no override). Depends only on the setting: when forcing
- * a palette the VS Code theme is irrelevant.
+ * The override class the webview applies, or `null` to inherit VS Code's live
+ * theme (no override).
+ *
+ * Key behavior: when the requested direction already matches VS Code's active
+ * appearance, we return `null` so the editor inherits the real theme (best
+ * fidelity - matches whatever dark/light theme the user actually uses). The
+ * synthetic palette is applied only when forcing the *opposite* of the active
+ * appearance, where there is no live theme to inherit.
  */
-export function forcedThemeClass(setting: EditorThemeSetting): string | null {
-  if (setting === 'defaultLight') return 'mdfh-force-light';
-  if (setting === 'defaultDark') return 'mdfh-force-dark';
-  return null;
+export function overrideClassFor(
+  setting: EditorThemeSetting,
+  vscodeIsDark: boolean
+): string | null {
+  if (setting === 'vscode') return null;
+  const wantDark = setting === 'defaultDark';
+  if (wantDark === vscodeIsDark) return null; // active theme already matches -> inherit it
+  return wantDark ? 'mdfh-force-dark' : 'mdfh-force-light';
 }
