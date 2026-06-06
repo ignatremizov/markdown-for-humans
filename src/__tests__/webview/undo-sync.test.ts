@@ -41,6 +41,9 @@ jest.mock('@tiptap/extension-code-block-lowlight', () => ({
   __esModule: true,
   default: { configure: () => ({}) },
 }));
+jest.mock('./../../webview/extensions/codeBlockWithCopy', () => ({
+  CodeBlockWithCopy: { configure: () => ({}) },
+}));
 jest.mock('./../../webview/extensions/customImage', () => ({
   CustomImage: { configure: () => ({}) },
 }));

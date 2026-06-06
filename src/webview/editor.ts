@@ -14,12 +14,11 @@ import { Markdown } from '@tiptap/markdown';
 import { TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { ListKit } from '@tiptap/extension-list';
 import Link from '@tiptap/extension-link';
-import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { CustomImage } from './extensions/customImage';
 import { lowlight } from 'lowlight';
 import { Mermaid } from './extensions/mermaid';
 import { IndentedImageCodeBlock } from './extensions/indentedImageCodeBlock';
-import { parsePreservedCodeBlock, renderPreservedCodeBlock } from './extensions/preservedCodeBlock';
+import { CodeBlockWithCopy } from './extensions/codeBlockWithCopy';
 import { SpaceFriendlyImagePaths } from './extensions/spaceFriendlyImagePaths';
 import { TabIndentation } from './extensions/tabIndentation';
 import { GitHubAlerts } from './extensions/githubAlerts';
@@ -539,26 +538,7 @@ function initializeEditor(initialContent: string) {
           },
         }),
         MarkdownParagraph, // Custom paragraph with empty-paragraph filtering in renderMarkdown
-        CodeBlockLowlight.extend({
-          addAttributes() {
-            return {
-              ...this.parent?.(),
-              'indent-prefix': {
-                default: null,
-                parseHTML: element => element.getAttribute('data-indent-prefix'),
-                renderHTML: attributes => {
-                  const prefix = attributes['indent-prefix'];
-                  if (typeof prefix !== 'string' || prefix.length === 0) {
-                    return {};
-                  }
-                  return { 'data-indent-prefix': prefix };
-                },
-              },
-            };
-          },
-          parseMarkdown: parsePreservedCodeBlock,
-          renderMarkdown: renderPreservedCodeBlock,
-        }).configure({
+        CodeBlockWithCopy.configure({
           lowlight,
           HTMLAttributes: {
             class: 'code-block-highlighted',

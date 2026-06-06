@@ -239,6 +239,95 @@
     line-height: 1.5;
     overflow-x: auto;
   }
+
+  .code-block-wrapper {
+    position: relative;
+    margin: 1em 0;
+  }
+
+  .code-block-wrapper .code-block-highlighted {
+    margin: 0;
+    padding-right: 60px;
+  }
+
+  .code-block-copy-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--vscode-editorWidget-border, var(--md-border));
+    border-radius: 6px;
+    background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    color: var(--vscode-editorWidget-foreground, var(--md-foreground));
+    cursor: pointer;
+    opacity: 0.8;
+    user-select: none;
+    transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  }
+
+  .code-block-copy-button:hover {
+    background-color: var(--vscode-list-hoverBackground);
+    opacity: 1;
+  }
+
+  .code-block-copy-button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+    opacity: 1;
+  }
+
+  .code-block-copy-button:active {
+    background-color: var(--vscode-list-activeSelectionBackground);
+  }
+
+  .code-block-copy-button .codicon {
+    font-size: 18px;
+  }
+
+  .code-block-copy-button.is-copied {
+    color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+    opacity: 1;
+  }
+
+  .code-block-copy-tooltip {
+    position: absolute;
+    top: 8px;
+    right: 48px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--vscode-editorWidget-border, var(--md-border));
+    border-radius: 6px;
+    background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    color: var(--vscode-editorWidget-foreground, var(--md-foreground));
+    font-family: var(--vscode-font-family);
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(4px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+  }
+
+  .code-block-copy-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+  }
+
+  .code-block-copy-tooltip.is-error {
+    color: var(--vscode-errorForeground);
+  }
   
   /* ============================================
      Syntax Highlighting - GitHub Theme (Light)
