@@ -4,10 +4,10 @@
 
 - **Task name:** Editor Theme Override
 - **Slug:** editor-theme-override
-- **Status:** in-progress
+- **Status:** shipped
 - **Created:** 2026-05-26
-- **Last updated:** 2026-05-26
-- **Shipped:** _(pending)_
+- **Last updated:** 2026-07-05
+- **Shipped:** 2026-07-05
 
 ---
 

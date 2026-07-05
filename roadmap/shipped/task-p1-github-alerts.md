@@ -4,10 +4,10 @@
 
 - **Task name:** GitHub Alerts Support
 - **Slug:** github-alerts
-- **Status:** in-progress
+- **Status:** shipped
 - **Created:** 2025-12-09
-- **Last updated:** 2025-12-09
-- **Shipped:** _(pending)_
+- **Last updated:** 2026-07-05
+- **Shipped:** 2026-07-05
 
 ---
 

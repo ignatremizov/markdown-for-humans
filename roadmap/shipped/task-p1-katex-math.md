@@ -4,10 +4,10 @@
 
 - **Task name:** KaTeX Math Support
 - **Slug:** katex-math
-- **Status:** planned
+- **Status:** shipped
 - **Created:** 2025-11-29
-- **Last updated:** 2025-11-29
-- **Shipped:** _(pending)_
+- **Last updated:** 2026-07-05
+- **Shipped:** 2026-07-05
 
 ---
 

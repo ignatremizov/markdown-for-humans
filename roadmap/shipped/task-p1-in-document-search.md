@@ -2,10 +2,10 @@
 
 - **Task name:** Reliable in-document search for Markdown for Humans
 - **Slug:** in-document-search
-- **Status:** implemented
+- **Status:** shipped
 - **Created:** 2025-12-09
-- **Last updated:** 2025-12-09
-- **Shipped:** 2025-12-09
+- **Last updated:** 2026-07-05
+- **Shipped:** 2026-07-05
 
 ---
 
