@@ -20,6 +20,7 @@ import {
   createMockTextEditor,
   mockStatusBarItem,
 } from '../../__mocks__/vscode';
+import { setActiveWebviewPanel } from '../../activeWebview';
 
 describe('calculateStats', () => {
   describe('word counting', () => {
@@ -333,10 +334,12 @@ describe('WordCountFeature', () => {
     };
     // Reset window mock
     window.activeTextEditor = undefined;
+    setActiveWebviewPanel(undefined);
   });
 
   afterEach(() => {
     feature.dispose();
+    setActiveWebviewPanel(undefined);
   });
 
   describe('activate', () => {
@@ -388,6 +391,17 @@ describe('WordCountFeature', () => {
       expect(mockStatusBarItem.show).toHaveBeenCalled();
       expect(mockStatusBarItem.text).toContain('words');
     });
+
+    it('should show word count for the active custom editor document', () => {
+      const doc = createMockTextDocument('Hello from custom editor', 'markdown');
+      window.activeTextEditor = undefined;
+      setActiveWebviewPanel({} as vscode.WebviewPanel, doc as vscode.TextDocument);
+
+      feature.activate(mockContext as unknown as vscode.ExtensionContext);
+
+      expect(mockStatusBarItem.show).toHaveBeenCalled();
+      expect(mockStatusBarItem.text).toBe('$(pencil) 4 words');
+    });
   });
 
   describe('showDetailedStats', () => {
@@ -409,6 +423,19 @@ describe('WordCountFeature', () => {
       const message = (window.showInformationMessage as jest.Mock).mock.calls[0][0];
       expect(message).toContain('Document Statistics');
       expect(message).toContain('Words');
+    });
+
+    it('should show stats for the active custom editor document', () => {
+      const doc = createMockTextDocument('Hello custom stats', 'markdown');
+      window.activeTextEditor = undefined;
+      setActiveWebviewPanel({} as vscode.WebviewPanel, doc as vscode.TextDocument);
+
+      feature.showDetailedStats();
+
+      expect(window.showInformationMessage).toHaveBeenCalled();
+      const message = (window.showInformationMessage as jest.Mock).mock.calls[0][0];
+      expect(message).toContain('Document Statistics');
+      expect(message).toContain('Words: 3');
     });
   });
 

@@ -204,8 +204,20 @@ export class TreeItem {
 }
 
 export class EventEmitter<T> {
-  public event = jest.fn();
-  fire = jest.fn((_data?: T) => {});
+  private listeners: Array<(data: T) => void> = [];
+  public event = jest.fn((listener: (data: T) => void) => {
+    this.listeners.push(listener);
+    return {
+      dispose: jest.fn(() => {
+        this.listeners = this.listeners.filter(item => item !== listener);
+      }),
+    };
+  });
+  fire = jest.fn((data: T) => {
+    for (const listener of this.listeners) {
+      listener(data);
+    }
+  });
   dispose = jest.fn();
 }
 

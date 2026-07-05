@@ -5,6 +5,7 @@
  */
 
 import * as vscode from 'vscode';
+import { getActiveWebviewDocument, onDidChangeActiveWebview } from '../activeWebview';
 
 /**
  * Document statistics interface
@@ -110,7 +111,8 @@ export class WordCountFeature {
     this.disposables.push(
       vscode.workspace.onDidChangeTextDocument(() => this.update()),
       vscode.window.onDidChangeActiveTextEditor(() => this.update()),
-      vscode.window.onDidChangeTextEditorSelection(() => this.updateSelection())
+      vscode.window.onDidChangeTextEditorSelection(() => this.updateSelection()),
+      onDidChangeActiveWebview(() => this.update())
     );
 
     // Add to subscriptions for cleanup
@@ -121,17 +123,34 @@ export class WordCountFeature {
   }
 
   /**
+   * Resolve the markdown document to count, including custom-editor webviews
+   * that do not appear as VS Code active text editors.
+   */
+  private getActiveMarkdownDocument(): vscode.TextDocument | undefined {
+    const editor = vscode.window.activeTextEditor;
+    if (editor && isMarkdownDocument(editor.document)) {
+      return editor.document;
+    }
+
+    const webviewDocument = getActiveWebviewDocument();
+    if (webviewDocument && isMarkdownDocument(webviewDocument)) {
+      return webviewDocument;
+    }
+
+    return undefined;
+  }
+
+  /**
    * Update status bar with document stats
    */
   private update(): void {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || !isMarkdownDocument(editor.document)) {
+    const document = this.getActiveMarkdownDocument();
+    if (!document) {
       this.statusBarItem.hide();
       return;
     }
 
-    const text = editor.document.getText();
-    const stats = calculateStats(text);
+    const stats = calculateStats(document.getText());
 
     this.statusBarItem.text = `$(pencil) ${stats.words.toLocaleString()} words`;
     this.statusBarItem.tooltip = formatStatsTooltip(stats);
@@ -144,6 +163,7 @@ export class WordCountFeature {
   private updateSelection(): void {
     const editor = vscode.window.activeTextEditor;
     if (!editor || !isMarkdownDocument(editor.document)) {
+      this.update();
       return;
     }
 
@@ -163,14 +183,13 @@ export class WordCountFeature {
    * Show detailed stats in an information message
    */
   showDetailedStats(): void {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || !isMarkdownDocument(editor.document)) {
+    const document = this.getActiveMarkdownDocument();
+    if (!document) {
       vscode.window.showInformationMessage('No markdown document open');
       return;
     }
 
-    const text = editor.document.getText();
-    const stats = calculateStats(text);
+    const stats = calculateStats(document.getText());
 
     const message = [
       `📊 Document Statistics`,
