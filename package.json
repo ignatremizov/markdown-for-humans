@@ -23,7 +23,8 @@
   },
   "homepage": "https://github.com/concretios/markdown-for-humans#readme",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.85.0",
+    "node": ">=22"
   },
   "categories": [
     "Other",
