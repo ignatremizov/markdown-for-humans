@@ -23,6 +23,16 @@ import {
   type EditorThemeSetting,
 } from '../shared/editorTheme';
 
+const FALLBACK_EXTENSION_ID = 'concretio.markdown-for-humans';
+
+export function formatExtensionSettingsQuery(extensionId: unknown): string {
+  const id =
+    typeof extensionId === 'string' && extensionId.trim().length > 0
+      ? extensionId
+      : FALLBACK_EXTENSION_ID;
+  return `@ext:${id}`;
+}
+
 /**
  * Coerce text to end with exactly one `\n` (markdownlint MD047). An empty
  * string stays empty — we don't want to materialize a single-newline file from
@@ -860,7 +870,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       case 'openExtensionSettings':
         vscode.commands.executeCommand(
           'workbench.action.openSettings',
-          '@ext:concretio.markdown-for-humans'
+          formatExtensionSettingsQuery(this.context.extension?.id)
         );
         break;
       case 'toggleTheme':
