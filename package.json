@@ -205,7 +205,60 @@
         "markdownForHumans.chromePath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to Google Chrome or Chromium executable for PDF export. Leave empty to auto-detect.\n\n**Download Chrome:**\n- [Windows/Mac/Linux](https://www.google.com/chrome/)\n- [Chromium (open source)](https://www.chromium.org/getting-involved/download-chromium/)\n\n**Common paths:**\n- **Mac:** `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`\n- **Windows:** `C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe`\n- **Linux:** `/usr/bin/google-chrome` or `/usr/bin/chromium`"
+          "markdownDescription": "Path to Google Chrome or Chromium executable for PDF export. Leave empty to auto-detect.\n\n**Download Chrome:**\n- [Windows/Mac/Linux](https://www.google.com/chrome/)\n- [Chromium (open source)](https://www.chromium.org/getting-involved/download-chromium/)\n\n**Common paths:**\n- **Mac:** `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`\n- **Windows:** `C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe`\n- **Linux:** `/usr/bin/google-chrome` or `/usr/bin/chromium`",
+          "scope": "application"
+        },
+        "markdownForHumans.export.pdfRawHtmlMode": {
+          "type": "string",
+          "enum": [
+            "strict",
+            "styled",
+            "looseStyle",
+            "loose"
+          ],
+          "enumDescriptions": [
+            "Strip active HTML and raw style blocks before PDF export.",
+            "Keep style blocks after removing resource-loading CSS, while stripping active HTML.",
+            "Keep authored CSS as written, while stripping active HTML.",
+            "Preserve authored raw HTML and CSS for trusted documents."
+          ],
+          "default": "strict",
+          "markdownDescription": "Controls how raw HTML and CSS are handled during PDF export. Use `strict` for untrusted documents. `looseStyle` and `loose` can allow CSS or HTML to reference local or remote resources.",
+          "scope": "application"
+        },
+        "markdownForHumans.export.wordRawHtmlMode": {
+          "type": "string",
+          "enum": [
+            "strict",
+            "loose"
+          ],
+          "enumDescriptions": [
+            "Strip active HTML and raw style blocks before DOCX conversion.",
+            "Preserve authored raw HTML for trusted documents. Authored CSS is still not applied to DOCX styling."
+          ],
+          "default": "strict",
+          "markdownDescription": "Controls how raw HTML is handled during Word/DOCX export. Word export does not apply authored CSS from style blocks or inline style attributes.",
+          "scope": "application"
+        },
+        "markdownForHumans.export.externalLocalImages": {
+          "type": "string",
+          "enum": [
+            "strip",
+            "include"
+          ],
+          "enumDescriptions": [
+            "Only include local images under the markdown document directory or open workspace folders.",
+            "Also include local image paths outside the document/workspace roots, such as shared asset folders."
+          ],
+          "default": "strip",
+          "markdownDescription": "Controls whether PDF and Word exports may read and embed local image files outside the markdown document directory or open workspace folders. Project/workspace images are always allowed.",
+          "scope": "application"
+        },
+        "markdownForHumans.export.showLimitationsWarning": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the generic export limitations warning before PDF or Word export.",
+          "scope": "application"
         },
         "markdownForHumans.imageResize.skipWarning": {
           "type": "boolean",

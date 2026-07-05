@@ -10,8 +10,11 @@
  * See SECURITY review §H3.
  *
  * Contract:
- *   sanitizeExportHtml(html: string): string
- *     - removes <script>, <iframe>, <object>, <embed>, <link>, <meta>
+ *   sanitizeExportHtml(html: string, { mode }): string
+ *     - strict/default removes <script>, <style>, <iframe>, <object>, <embed>, <link>, <meta>
+ *     - styled keeps <style> blocks after stripping resource-loading CSS
+ *     - looseStyle keeps authored CSS while still stripping active HTML
+ *     - loose preserves authored raw HTML/CSS for trusted documents
  *     - removes every on* event handler attribute
  *     - rewrites href / src / xlink:href / data attributes whose value is a
  *       javascript: or data:text/html: scheme to an empty string
@@ -19,7 +22,22 @@
  *       images, anchors, span/div with class/style/data-* attrs
  */
 
-import { sanitizeExportHtml } from '../../features/documentExport';
+import { pathToFileURL } from 'url';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as vscode from 'vscode';
+import {
+  buildFileBaseHrefForExport,
+  getConfiguredExportSanitizeMode,
+  getConfiguredExportLimitationsWarningEnabled,
+  getConfiguredExternalLocalImageMode,
+  inlineMermaidImagesForExport,
+  preparePdfHtmlResourcesForExport,
+  resolveTrustedWordImagePath,
+  sanitizeExportHtml,
+  strictExportSanitizationWouldRewriteHtml,
+} from '../../features/documentExport';
 
 describe('sanitizeExportHtml', () => {
   describe('strips active content', () => {
@@ -52,6 +70,81 @@ describe('sanitizeExportHtml', () => {
       );
       expect(out).not.toMatch(/<meta/i);
       expect(out).not.toMatch(/<link/i);
+    });
+
+    it('removes <style> blocks in strict mode', () => {
+      const out = sanitizeExportHtml(
+        '<p>safe</p><style>@import url(https://evil.example/pixel); body{background:url(file:///etc/passwd)}</style>'
+      );
+
+      expect(out).toContain('safe');
+      expect(out).not.toMatch(/<style/i);
+      expect(out).not.toContain('evil.example');
+      expect(out).not.toContain('file:///etc/passwd');
+    });
+
+    it('keeps safe <style> rules in styled mode and removes resource-loading CSS', () => {
+      const out = sanitizeExportHtml(
+        [
+          '<p>safe</p>',
+          '<style>',
+          '@import url(https://evil.example/pixel);',
+          'body{background:url(file:///etc/passwd);color:red;font-weight:bold}',
+          '.reader{font-family:Georgia,serif}',
+          '</style>',
+        ].join(''),
+        { mode: 'styled' }
+      );
+
+      expect(out).toContain('safe');
+      expect(out).toMatch(/<style/i);
+      expect(out).toContain('color:red');
+      expect(out).toContain('font-weight:bold');
+      expect(out).toContain('font-family:Georgia,serif');
+      expect(out).not.toContain('@import');
+      expect(out).not.toMatch(/url\s*\(/i);
+      expect(out).not.toContain('evil.example');
+      expect(out).not.toContain('file:///etc/passwd');
+    });
+
+    it('removes CSS-escaped resource fetches from styled mode style blocks', () => {
+      const out = sanitizeExportHtml(
+        '<style>body{background:u\\72l(https://evil.example/pixel);color:red}</style>',
+        { mode: 'styled' }
+      );
+
+      expect(out).toMatch(/<style/i);
+      expect(out).toContain('color:red');
+      expect(out).not.toMatch(/u\\72l/i);
+      expect(out).not.toContain('evil.example');
+    });
+
+    it('preserves raw CSS in looseStyle mode while stripping active HTML', () => {
+      const out = sanitizeExportHtml(
+        [
+          '<style>@import url(https://styles.example/fonts.css); body{background:url(file:///etc/passwd);color:red}</style>',
+          '<script>alert(1)</script>',
+          '<p onclick="evil()" style="background:url(https://styles.example/pixel);color:red">',
+          '<a href="javascript:alert(1)">x</a>',
+          '</p>',
+        ].join(''),
+        { mode: 'looseStyle' }
+      );
+
+      expect(out).toMatch(/<style/i);
+      expect(out).toContain('@import url(https://styles.example/fonts.css)');
+      expect(out).toContain('background:url(file:///etc/passwd)');
+      expect(out).toContain('background:url(https://styles.example/pixel)');
+      expect(out).not.toMatch(/<script/i);
+      expect(out).not.toMatch(/onclick/i);
+      expect(out).not.toMatch(/javascript:/i);
+    });
+
+    it('preserves raw authored HTML and CSS in loose mode', () => {
+      const html =
+        '<style>@import url(https://evil.example/pixel)</style><script>alert(1)</script><p onclick="evil()">x</p>';
+
+      expect(sanitizeExportHtml(html, { mode: 'loose' })).toBe(html);
     });
   });
 
@@ -131,6 +224,28 @@ describe('sanitizeExportHtml', () => {
       // must not survive on any element.
       expect(out).not.toMatch(/data:text\/html/i);
     });
+
+    it('strips CSS url() fetches from style attributes', () => {
+      const out = sanitizeExportHtml(
+        '<p style="color:red;background-image:url(https://evil.example/pixel);font-weight:bold">x</p>'
+      );
+
+      expect(out).not.toMatch(/url\s*\(/i);
+      expect(out).not.toContain('evil.example');
+      expect(out).toContain('color:red');
+      expect(out).toContain('font-weight:bold');
+    });
+
+    it('strips CSS url() fetches when function names use CSS escapes', () => {
+      const out = sanitizeExportHtml(
+        '<p style="color:red;background-image:u\\72l(https://evil.example/pixel);font-weight:bold">x</p>'
+      );
+
+      expect(out).not.toMatch(/u\\72l/i);
+      expect(out).not.toContain('evil.example');
+      expect(out).toContain('color:red');
+      expect(out).toContain('font-weight:bold');
+    });
   });
 
   describe('preserves benign markup', () => {
@@ -176,5 +291,357 @@ describe('sanitizeExportHtml', () => {
         sanitizeExportHtml('<p>unclosed <strong>nested <a href="x">stuff')
       ).not.toThrow();
     });
+  });
+});
+
+describe('strictExportSanitizationWouldRewriteHtml', () => {
+  it('does not rewrite safe markdown-derived HTML', () => {
+    expect(strictExportSanitizationWouldRewriteHtml('<p style="color:red">safe</p>')).toBe(false);
+  });
+
+  it('rewrites raw style blocks', () => {
+    expect(
+      strictExportSanitizationWouldRewriteHtml('<style>body{color:red}</style><p>safe</p>')
+    ).toBe(true);
+  });
+
+  it('rewrites active HTML', () => {
+    expect(strictExportSanitizationWouldRewriteHtml('<p onclick="evil()">x</p>')).toBe(true);
+  });
+});
+
+describe('export settings', () => {
+  afterEach(() => {
+    (vscode.workspace.getConfiguration as jest.Mock).mockReset();
+  });
+
+  it('reads the PDF raw HTML/CSS mode from settings', () => {
+    (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+      get: jest.fn((key: string, defaultValue: unknown) =>
+        key === 'export.pdfRawHtmlMode' ? 'looseStyle' : defaultValue
+      ),
+    });
+
+    expect(getConfiguredExportSanitizeMode('pdf')).toBe('looseStyle');
+  });
+
+  it('falls back to strict when a Word setting requests a CSS-only mode', () => {
+    (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+      get: jest.fn((key: string, defaultValue: unknown) =>
+        key === 'export.wordRawHtmlMode' ? 'styled' : defaultValue
+      ),
+    });
+
+    expect(getConfiguredExportSanitizeMode('docx')).toBe('strict');
+  });
+
+  it('reads the external local image policy from settings', () => {
+    (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+      get: jest.fn((key: string, defaultValue: unknown) =>
+        key === 'export.externalLocalImages' ? 'include' : defaultValue
+      ),
+    });
+
+    expect(getConfiguredExternalLocalImageMode()).toBe('include');
+  });
+
+  it('reads whether the generic export limitations warning is enabled', () => {
+    (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+      get: jest.fn((key: string, defaultValue: unknown) =>
+        key === 'export.showLimitationsWarning' ? false : defaultValue
+      ),
+    });
+
+    expect(getConfiguredExportLimitationsWarningEnabled()).toBe(false);
+  });
+});
+
+describe('buildFileBaseHrefForExport', () => {
+  it('encodes a local directory as a file URL with a trailing slash', () => {
+    const dir = '/tmp/Markdown Docs/#draft?one';
+    const href = buildFileBaseHrefForExport(dir);
+
+    expect(href).toBe(pathToFileURL(`${dir}/`).href);
+    expect(href).toContain('Markdown%20Docs');
+    expect(href).toContain('%23draft%3Fone');
+    expect(href.endsWith('/')).toBe(true);
+  });
+});
+
+describe('resolveTrustedWordImagePath', () => {
+  let tempDir: string;
+  let workspaceRoot: string;
+  let docDir: string;
+  let privateDir: string;
+  let document: vscode.TextDocument;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'md4h-word-images-'));
+    workspaceRoot = path.join(tempDir, 'workspace');
+    docDir = path.join(workspaceRoot, 'docs');
+    privateDir = path.join(tempDir, 'private');
+    fs.mkdirSync(path.join(docDir, 'images'), { recursive: true });
+    fs.mkdirSync(privateDir, { recursive: true });
+    fs.writeFileSync(path.join(docDir, 'images', 'trusted.png'), 'trusted');
+    fs.writeFileSync(path.join(docDir, 'images', 'test%ZZ.png'), 'literal percent');
+    fs.writeFileSync(path.join(privateDir, 'secret.png'), 'secret');
+
+    document = {
+      uri: vscode.Uri.file(path.join(docDir, 'note.md')),
+    } as vscode.TextDocument;
+
+    (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue({
+      uri: vscode.Uri.file(workspaceRoot),
+      name: 'workspace',
+      index: 0,
+    });
+    (vscode.workspace as unknown as { workspaceFolders?: unknown }).workspaceFolders = [
+      {
+        uri: vscode.Uri.file(workspaceRoot),
+        name: 'workspace',
+        index: 0,
+      },
+    ];
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReset();
+    (vscode.workspace as unknown as { workspaceFolders?: unknown }).workspaceFolders = undefined;
+  });
+
+  it('resolves relative image paths under the document directory', () => {
+    expect(resolveTrustedWordImagePath('images/trusted.png', document)).toBe(
+      path.join(docDir, 'images', 'trusted.png')
+    );
+  });
+
+  it('rejects absolute image paths outside the document workspace roots', () => {
+    expect(resolveTrustedWordImagePath(path.join(privateDir, 'secret.png'), document)).toBeNull();
+  });
+
+  it('resolves literal local paths with malformed percent escapes', () => {
+    expect(resolveTrustedWordImagePath('images/test%ZZ.png', document)).toBe(
+      path.join(docDir, 'images', 'test%ZZ.png')
+    );
+  });
+});
+
+describe('preparePdfHtmlResourcesForExport', () => {
+  let tempDir: string;
+  let workspaceRoot: string;
+  let docDir: string;
+  let privateDir: string;
+  let document: vscode.TextDocument;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'md4h-pdf-images-'));
+    workspaceRoot = path.join(tempDir, 'workspace');
+    docDir = path.join(workspaceRoot, 'docs');
+    privateDir = path.join(tempDir, 'private');
+    fs.mkdirSync(path.join(docDir, 'images'), { recursive: true });
+    fs.mkdirSync(privateDir, { recursive: true });
+    fs.writeFileSync(path.join(docDir, 'images', 'trusted.svg'), '<svg>trusted</svg>');
+    fs.writeFileSync(path.join(docDir, 'images', 'test%ZZ.svg'), '<svg>malformed</svg>');
+    fs.writeFileSync(path.join(privateDir, 'secret.svg'), '<svg>secret</svg>');
+
+    document = {
+      uri: vscode.Uri.file(path.join(docDir, 'note.md')),
+    } as vscode.TextDocument;
+
+    (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue({
+      uri: vscode.Uri.file(workspaceRoot),
+      name: 'workspace',
+      index: 0,
+    });
+    (vscode.workspace as unknown as { workspaceFolders?: unknown }).workspaceFolders = [
+      {
+        uri: vscode.Uri.file(workspaceRoot),
+        name: 'workspace',
+        index: 0,
+      },
+    ];
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReset();
+    (vscode.workspace as unknown as { workspaceFolders?: unknown }).workspaceFolders = undefined;
+  });
+
+  it('inlines trusted local image sources before PDF rendering', () => {
+    const out = preparePdfHtmlResourcesForExport(
+      '<p><img src="vscode-webview://image" data-markdown-src="./images/trusted.svg" srcset="../../private/secret.svg 2x" alt="Trusted"></p>',
+      document,
+      'strict'
+    );
+
+    expect(out).toContain('src="data:image/svg+xml;base64,PHN2Zz50cnVzdGVkPC9zdmc+"');
+    expect(out).toContain('alt="Trusted"');
+    expect(out).not.toContain('vscode-webview://image');
+    expect(out).not.toContain('data-markdown-src');
+    expect(out).not.toContain('srcset');
+    expect(out).not.toContain('secret.svg');
+  });
+
+  it('strips local image sources outside trusted roots in strict PDF HTML', () => {
+    const secretRelativePath = path.relative(docDir, path.join(privateDir, 'secret.svg'));
+    const out = preparePdfHtmlResourcesForExport(
+      `<p><img src="${secretRelativePath}" alt="Secret"></p>`,
+      document,
+      'strict'
+    );
+
+    expect(out).toContain('<img');
+    expect(out).toContain('alt="Secret"');
+    expect(out).not.toContain('secret.svg');
+    expect(out).not.toMatch(/\ssrc=/i);
+  });
+
+  it('strips external local image sources in loose PDF HTML by default', () => {
+    const secretRelativePath = path.relative(docDir, path.join(privateDir, 'secret.svg'));
+    const out = preparePdfHtmlResourcesForExport(
+      `<style>p{color:red}</style><script>alert(1)</script><p><img src="${secretRelativePath}" alt="Secret"></p>`,
+      document,
+      'loose'
+    );
+
+    expect(out).toContain('<style>p{color:red}</style>');
+    expect(out).toContain('<script>alert(1)</script>');
+    expect(out).toContain('<img');
+    expect(out).toContain('alt="Secret"');
+    expect(out).not.toContain('secret.svg');
+    expect(out).not.toMatch(/\ssrc=/i);
+  });
+
+  it('inlines external local image sources when export settings allow them', () => {
+    const secretRelativePath = path.relative(docDir, path.join(privateDir, 'secret.svg'));
+    const out = preparePdfHtmlResourcesForExport(
+      `<p><img src="${secretRelativePath}" alt="External"></p>`,
+      document,
+      'strict',
+      'include'
+    );
+
+    expect(out).toContain('src="data:image/svg+xml;base64,PHN2Zz5zZWNyZXQ8L3N2Zz4="');
+    expect(out).toContain('alt="External"');
+    expect(out).not.toContain('secret.svg');
+  });
+
+  it('inlines external local image sources in loose PDF HTML when export settings allow them', () => {
+    const secretRelativePath = path.relative(docDir, path.join(privateDir, 'secret.svg'));
+    const out = preparePdfHtmlResourcesForExport(
+      `<p><img src="${secretRelativePath}" alt="External"></p>`,
+      document,
+      'loose',
+      'include'
+    );
+
+    expect(out).toContain('src="data:image/svg+xml;base64,PHN2Zz5zZWNyZXQ8L3N2Zz4="');
+    expect(out).toContain('alt="External"');
+    expect(out).not.toContain('secret.svg');
+  });
+
+  it('strips external local CSS urls in looseStyle PDF HTML by default', () => {
+    const secretRelativePath = path.relative(docDir, path.join(privateDir, 'secret.svg'));
+    const out = preparePdfHtmlResourcesForExport(
+      [
+        '<style>',
+        `.cover{background-image:url("${secretRelativePath}");color:red}`,
+        '</style>',
+        `<p style="background:url('${secretRelativePath}');font-weight:bold">Styled</p>`,
+      ].join(''),
+      document,
+      'looseStyle'
+    );
+
+    expect(out).toContain('<style>');
+    expect(out).toContain('color:red');
+    expect(out).toContain('font-weight:bold');
+    expect(out).not.toContain('secret.svg');
+  });
+
+  it('strips external local CSS urls when url() is CSS-escaped', () => {
+    const secretRelativePath = path.relative(docDir, path.join(privateDir, 'secret.svg'));
+    const out = preparePdfHtmlResourcesForExport(
+      `<p style="background:u\\72l('${secretRelativePath}');font-weight:bold">Styled</p>`,
+      document,
+      'looseStyle'
+    );
+
+    expect(out).toContain('font-weight:bold');
+    expect(out).not.toContain('u\\72l');
+    expect(out).not.toContain('secret.svg');
+  });
+
+  it('inlines trusted local CSS urls before PDF rendering', () => {
+    const out = preparePdfHtmlResourcesForExport(
+      '<style>.cover{background-image:url("./images/trusted.svg")}</style>',
+      document,
+      'looseStyle'
+    );
+
+    expect(out).toContain(
+      'background-image:url("data:image/svg+xml;base64,PHN2Zz50cnVzdGVkPC9zdmc+")'
+    );
+    expect(out).not.toContain('./images/trusted.svg');
+  });
+
+  it('strips external local source srcset candidates in loose PDF HTML by default', () => {
+    const secretRelativePath = path.relative(docDir, path.join(privateDir, 'secret.svg'));
+    const out = preparePdfHtmlResourcesForExport(
+      `<picture><source srcset="./images/trusted.svg 1x, ${secretRelativePath} 2x"><img src="./images/trusted.svg" alt="Trusted"></picture>`,
+      document,
+      'loose'
+    );
+
+    expect(out).toContain('srcset="data:image/svg+xml;base64,PHN2Zz50cnVzdGVkPC9zdmc+ 1x"');
+    expect(out).not.toContain('secret.svg');
+  });
+
+  it('strips external local srcset candidates when commas have no following space', () => {
+    const secretRelativePath = path.relative(docDir, path.join(privateDir, 'secret.svg'));
+    const out = preparePdfHtmlResourcesForExport(
+      `<picture><source srcset="./images/trusted.svg 1x,${secretRelativePath} 2x"><img src="./images/trusted.svg" alt="Trusted"></picture>`,
+      document,
+      'loose'
+    );
+
+    expect(out).toContain('srcset="data:image/svg+xml;base64,PHN2Zz50cnVzdGVkPC9zdmc+ 1x"');
+    expect(out).not.toContain('secret.svg');
+  });
+
+  it('inlines paths with malformed percent escapes before PDF rendering', () => {
+    const out = preparePdfHtmlResourcesForExport(
+      '<p><img src="./images/test%ZZ.svg" alt="Literal percent"></p>',
+      document,
+      'strict'
+    );
+
+    expect(out).toContain('src="data:image/svg+xml;base64,PHN2Zz5tYWxmb3JtZWQ8L3N2Zz4="');
+    expect(out).not.toContain('test%ZZ.svg');
+  });
+});
+
+describe('inlineMermaidImagesForExport', () => {
+  it('replaces a Mermaid wrapper with the PNG captured by the webview', () => {
+    const out = inlineMermaidImagesForExport(
+      '<p>before</p><div class="mermaid-wrapper" data-mermaid-id="mermaid-0"><svg><text>Graph</text></svg></div><p>after</p>',
+      [
+        {
+          id: 'mermaid-0',
+          pngDataUrl: 'data:image/png;base64,abc123',
+          originalSvg: '<svg><text>Graph</text></svg>',
+        },
+      ]
+    );
+
+    expect(out).toContain('<p>before</p>');
+    expect(out).toContain('<p>after</p>');
+    expect(out).toContain('<img');
+    expect(out).toContain('src="data:image/png;base64,abc123"');
+    expect(out).toContain('class="mermaid-export-image"');
+    expect(out).not.toContain('mermaid-wrapper');
+    expect(out).not.toContain('<svg');
   });
 });

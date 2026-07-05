@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
 import * as cheerio from 'cheerio';
 import { imageSize } from 'image-size';
 
@@ -37,23 +38,77 @@ import { imageSize } from 'image-size';
  * sanitization. We allow nothing implicitly; instead we deny-list the
  * specific dangerous tags / attributes / URI schemes. Benign markup
  * (paragraphs, tables, code, images with relative or data: src, anchors,
- * style/class) passes through untouched.
+ * class, safe style declarations) passes through untouched in strict mode.
+ * The export flow may switch to styled mode to preserve sanitized raw CSS,
+ * looseStyle mode to preserve authored CSS while keeping strict HTML
+ * filtering, or loose mode to preserve authored HTML/CSS, based on export
+ * settings configured by the user.
  *
  * See SECURITY review §H3.
  */
-export function sanitizeExportHtml(html: string): string {
+export type ExportSanitizeMode = 'strict' | 'styled' | 'looseStyle' | 'loose';
+
+export interface ExportSanitizeOptions {
+  mode?: ExportSanitizeMode;
+}
+
+function decodeCssEscapes(value: string): string {
+  return value.replace(/\\([0-9a-fA-F]{1,6}\s?|.)/g, (_match, escaped: string) => {
+    const hexMatch = escaped.match(/^([0-9a-fA-F]{1,6})\s?$/);
+    if (!hexMatch) {
+      return escaped;
+    }
+
+    const codePoint = Number.parseInt(hexMatch[1], 16);
+    if (!Number.isFinite(codePoint) || codePoint <= 0 || codePoint > 0x10ffff) {
+      return '';
+    }
+
+    return String.fromCodePoint(codePoint);
+  });
+}
+
+export function sanitizeExportHtml(html: string, options: ExportSanitizeOptions = {}): string {
   if (!html) {
     return '';
   }
+
+  if (options.mode === 'loose') {
+    return html;
+  }
+
+  const mode = options.mode ?? 'strict';
+
   // Wrap in a sentinel so we can extract just the body fragment back out
   // without cheerio injecting <html><head><body> wrappers.
   const $ = cheerio.load(`<div data-md4h-sanitize-root>${html}</div>`);
 
   // 1) Remove dangerous tags entirely (including their contents).
-  $(
-    'script, iframe, object, embed, link, meta, base, form, input, button, ' +
-      'textarea, frame, frameset, applet, audio, video, source, track, portal'
-  ).remove();
+  const removedTags = [
+    'script',
+    'iframe',
+    'object',
+    'embed',
+    'link',
+    'meta',
+    'base',
+    'form',
+    'input',
+    'button',
+    'textarea',
+    'frame',
+    'frameset',
+    'applet',
+    'audio',
+    'video',
+    'source',
+    'track',
+    'portal',
+  ];
+  if (mode === 'strict') {
+    removedTags.push('style');
+  }
+  $(removedTags.join(', ')).remove();
 
   // 2) Strip every on* event handler and any URL-bearing attribute whose
   //    value uses a script-bearing scheme.
@@ -81,6 +136,59 @@ export function sanitizeExportHtml(html: string): string {
   // Note: data: URIs don't have a second colon, so they must be handled as a
   // separate branch rather than grouped with the scheme-colon pattern.
   const DANGEROUS_SCHEME = /^\s*(?:(?:javascript|file|vbscript)\s*:|data:(?!image\/))/i;
+  const DANGEROUS_CSS = /(?:url\s*\(|@import|expression\s*\()/i;
+
+  const sanitizeStyle = (style: string): string => {
+    const safeDeclarations = style
+      .split(';')
+      .map(part => part.trim())
+      .filter(part => part.length > 0 && !DANGEROUS_CSS.test(decodeCssEscapes(part)));
+    return safeDeclarations.join(';');
+  };
+
+  const containsDangerousCss = (css: string): boolean => DANGEROUS_CSS.test(decodeCssEscapes(css));
+
+  const stripEmptyCssRules = (styleSheet: string): string => {
+    let previous = styleSheet;
+    let next = previous.replace(/[^{}]+\{\s*\}/g, '');
+    while (next !== previous) {
+      previous = next;
+      next = previous.replace(/[^{}]+\{\s*\}/g, '');
+    }
+    return next.trim();
+  };
+
+  const sanitizeStyleSheet = (styleSheet: string): string => {
+    const parts = styleSheet.split(/([;}])/);
+    const sanitizedParts: string[] = [];
+    for (let index = 0; index < parts.length; index += 2) {
+      const body = parts[index] ?? '';
+      const delimiter = parts[index + 1] ?? '';
+      const fragment = `${body}${delimiter}`;
+      if (!containsDangerousCss(fragment)) {
+        sanitizedParts.push(fragment);
+        continue;
+      }
+
+      const lastOpenBrace = body.lastIndexOf('{');
+      const prefix = lastOpenBrace >= 0 ? body.slice(0, lastOpenBrace + 1) : '';
+      const closingBrace = delimiter === '}' ? '}' : '';
+      sanitizedParts.push(`${prefix}${closingBrace}`);
+    }
+
+    return stripEmptyCssRules(sanitizedParts.join(''));
+  };
+
+  if (mode === 'styled') {
+    $('style').each((_, el) => {
+      const sanitized = sanitizeStyleSheet($(el).html() ?? '');
+      if (sanitized.length > 0) {
+        $(el).text(sanitized);
+      } else {
+        $(el).remove();
+      }
+    });
+  }
 
   $('*').each((_, el) => {
     const tagEl = el as { attribs?: Record<string, string> };
@@ -91,6 +199,20 @@ export function sanitizeExportHtml(html: string): string {
       const lower = attrName.toLowerCase();
       if (lower.startsWith('on')) {
         $(el).removeAttr(attrName);
+        continue;
+      }
+      if (lower === 'style') {
+        if (mode === 'looseStyle') {
+          continue;
+        }
+
+        const value = tagEl.attribs[attrName];
+        const sanitized = typeof value === 'string' ? sanitizeStyle(value) : '';
+        if (sanitized.length > 0) {
+          $(el).attr(attrName, sanitized);
+        } else {
+          $(el).removeAttr(attrName);
+        }
         continue;
       }
       if (URL_LIKE_ATTRS.has(lower)) {
@@ -105,13 +227,123 @@ export function sanitizeExportHtml(html: string): string {
   return $('[data-md4h-sanitize-root]').html() || '';
 }
 
+export function strictExportSanitizationWouldRewriteHtml(html: string): boolean {
+  if (!html) {
+    return false;
+  }
+
+  return sanitizeExportHtml(html, { mode: 'strict' }) !== html;
+}
+
+/**
+ * Build a file:// base href for Chrome's export HTML.
+ *
+ * `pathToFileURL` handles platform separators and percent-encodes reserved
+ * characters. Raw `file://${path}/` interpolation breaks paths with spaces,
+ * `#`, `?`, and Windows drive syntax.
+ */
+export function buildFileBaseHrefForExport(documentBasePath: string): string {
+  const withTrailingSeparator = documentBasePath.endsWith(path.sep)
+    ? documentBasePath
+    : `${documentBasePath}${path.sep}`;
+  return pathToFileURL(withTrailingSeparator).href;
+}
+
+/**
+ * Inline Mermaid PNGs captured by the webview into the HTML fragment sent to
+ * export backends. The current webview normally does this before sending HTML,
+ * but applying the images here keeps the backend robust if a wrapper or stale
+ * placeholder reaches the extension side.
+ */
+export function inlineMermaidImagesForExport(html: string, mermaidImages: MermaidImage[]): string {
+  if (!html || mermaidImages.length === 0) {
+    return html;
+  }
+
+  const $ = cheerio.load(`<div data-md4h-mermaid-root>${html}</div>`);
+  const root = $('[data-md4h-mermaid-root]');
+
+  const createImage = (image: MermaidImage, index: number) => {
+    const img = $('<img>');
+    img.attr('src', image.pngDataUrl);
+    img.attr('alt', `Mermaid diagram ${index + 1}`);
+    img.attr('class', 'mermaid-export-image');
+    img.attr('data-mermaid-id', image.id);
+    return img;
+  };
+
+  mermaidImages.forEach((image, index) => {
+    const candidates = root.find('[data-mermaid-id]').filter((_, el) => {
+      return $(el).attr('data-mermaid-id') === image.id;
+    });
+
+    if (candidates.length > 0) {
+      candidates.each((_, el) => {
+        const target = $(el);
+        if (target.is('img')) {
+          target.attr('src', image.pngDataUrl);
+          target.attr('class', 'mermaid-export-image');
+        } else {
+          target.replaceWith(createImage(image, index));
+        }
+      });
+      return;
+    }
+
+    const wrapper = root.find('.mermaid-wrapper').eq(index);
+    if (wrapper.length > 0) {
+      wrapper.replaceWith(createImage(image, index));
+    }
+  });
+
+  return root.html() || '';
+}
+
 /**
  * Mermaid image data
  */
-interface MermaidImage {
+export interface MermaidImage {
   id: string;
   pngDataUrl: string;
   originalSvg: string;
+}
+
+export type ExportExternalLocalImageMode = 'strip' | 'include';
+
+const PDF_EXPORT_SANITIZE_MODES: readonly ExportSanitizeMode[] = [
+  'strict',
+  'styled',
+  'looseStyle',
+  'loose',
+];
+const WORD_EXPORT_SANITIZE_MODES: readonly ExportSanitizeMode[] = ['strict', 'loose'];
+
+function isAllowedExportSanitizeMode(
+  value: unknown,
+  allowedModes: readonly ExportSanitizeMode[]
+): value is ExportSanitizeMode {
+  return typeof value === 'string' && allowedModes.includes(value as ExportSanitizeMode);
+}
+
+export function getConfiguredExportSanitizeMode(format: string): ExportSanitizeMode {
+  const config = vscode.workspace.getConfiguration('markdownForHumans');
+  const isPdf = format === 'pdf';
+  const settingKey = isPdf ? 'export.pdfRawHtmlMode' : 'export.wordRawHtmlMode';
+  const allowedModes = isPdf ? PDF_EXPORT_SANITIZE_MODES : WORD_EXPORT_SANITIZE_MODES;
+  const configuredMode = config.get<string>(settingKey, 'strict');
+
+  return isAllowedExportSanitizeMode(configuredMode, allowedModes) ? configuredMode : 'strict';
+}
+
+export function getConfiguredExternalLocalImageMode(): ExportExternalLocalImageMode {
+  const config = vscode.workspace.getConfiguration('markdownForHumans');
+  const configuredMode = config.get<string>('export.externalLocalImages', 'strip');
+  return configuredMode === 'include' ? 'include' : 'strip';
+}
+
+export function getConfiguredExportLimitationsWarningEnabled(): boolean {
+  const config = vscode.workspace.getConfiguration('markdownForHumans');
+  return config.get<boolean>('export.showLimitationsWarning', true);
 }
 
 /**
@@ -131,6 +363,310 @@ function getDocumentBasePath(document: vscode.TextDocument): string {
   return os.homedir();
 }
 
+function realpathIfExists(targetPath: string): string | null {
+  try {
+    if (!fs.existsSync(targetPath)) {
+      return null;
+    }
+    return fs.realpathSync(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function isPathInsideRoot(candidatePath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, candidatePath);
+  return (
+    relative === '' ||
+    (relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative))
+  );
+}
+
+function expandHomePath(filePath: string): string {
+  if (filePath === '~') {
+    return os.homedir();
+  }
+
+  if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
+    return path.join(os.homedir(), filePath.slice(2));
+  }
+
+  return filePath;
+}
+
+function getTrustedWordImageRoots(document: vscode.TextDocument): string[] {
+  const roots = new Set<string>();
+
+  if (document.uri.scheme === 'file') {
+    roots.add(path.dirname(document.uri.fsPath));
+  }
+
+  const documentWorkspace = vscode.workspace.getWorkspaceFolder(document.uri);
+  if (documentWorkspace) {
+    roots.add(documentWorkspace.uri.fsPath);
+  }
+
+  for (const workspaceFolder of vscode.workspace.workspaceFolders ?? []) {
+    roots.add(workspaceFolder.uri.fsPath);
+  }
+
+  return Array.from(roots)
+    .map(root => realpathIfExists(root))
+    .filter((root): root is string => Boolean(root));
+}
+
+/**
+ * Resolve a DOCX local image source only when it lives under a trusted root.
+ *
+ * Word export receives HTML from the webview, including raw HTML authored in a
+ * markdown file. A standalone `<img src="/private/file.png">` must not let the
+ * exporter read arbitrary local files, so absolute and relative paths are
+ * checked against the source document directory and open workspace roots before
+ * `fs.readFileSync` is allowed.
+ */
+export function resolveTrustedWordImagePath(
+  imageSource: string,
+  document: vscode.TextDocument,
+  externalLocalImages: ExportExternalLocalImageMode = 'strip'
+): string | null {
+  const trimmed = imageSource.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^(?:data|https?|vscode-webview):/i.test(trimmed)) {
+    return null;
+  }
+
+  let decodedSource: string;
+  if (/^file:/i.test(trimmed)) {
+    try {
+      decodedSource = fileURLToPath(trimmed);
+    } catch {
+      return null;
+    }
+  } else {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !/^[a-zA-Z]:[\\/]/.test(trimmed)) {
+      return null;
+    }
+
+    try {
+      decodedSource = decodeURIComponent(trimmed);
+    } catch {
+      decodedSource = trimmed;
+    }
+    decodedSource = expandHomePath(decodedSource);
+  }
+  const candidatePath = path.isAbsolute(decodedSource)
+    ? decodedSource
+    : path.resolve(getDocumentBasePath(document), decodedSource);
+  const realCandidate = realpathIfExists(candidatePath);
+  if (!realCandidate) {
+    return null;
+  }
+
+  if (externalLocalImages === 'include') {
+    return realCandidate;
+  }
+
+  const trustedRoots = getTrustedWordImageRoots(document);
+  if (trustedRoots.some(root => isPathInsideRoot(realCandidate, root))) {
+    return realCandidate;
+  }
+
+  return null;
+}
+
+function getImageMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+  };
+  return mimeTypes[ext] || 'image/png';
+}
+
+function imageFileToDataUrl(filePath: string): string {
+  const buffer = fs.readFileSync(filePath);
+  return `data:${getImageMimeType(filePath)};base64,${buffer.toString('base64')}`;
+}
+
+function isPdfBrowserSafeResourceSource(source: string): boolean {
+  const trimmed = source.trim();
+  return trimmed.startsWith('#') || /^(?:data:|https?:|vscode-webview:|blob:)/i.test(trimmed);
+}
+
+function rewriteCssUrlsForPdfExport(
+  css: string,
+  document: vscode.TextDocument,
+  externalLocalImages: ExportExternalLocalImageMode
+): string {
+  return decodeCssEscapes(css).replace(
+    /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi,
+    (
+      match,
+      doubleQuoted: string | undefined,
+      singleQuoted: string | undefined,
+      bare: string | undefined
+    ) => {
+      const source = (doubleQuoted ?? singleQuoted ?? bare ?? '').trim();
+      if (!source || isPdfBrowserSafeResourceSource(source)) {
+        return match;
+      }
+
+      const trustedImagePath = resolveTrustedWordImagePath(source, document, externalLocalImages);
+      if (!trustedImagePath) {
+        return 'none';
+      }
+
+      try {
+        return `url("${imageFileToDataUrl(trustedImagePath)}")`;
+      } catch (error) {
+        console.warn('[MD4H] PDF export: Failed to inline local CSS resource:', error);
+        return 'none';
+      }
+    }
+  );
+}
+
+/**
+ * Resolve or remove browser-fetching local resources before Chrome renders PDF HTML.
+ *
+ * PDF exports add a file:// base URL so normal relative document links resolve.
+ * Without this pass, Chrome can also resolve relative image URLs like
+ * `../../private/secret.svg` against that base and embed renderable local files
+ * in a PDF. Local image resources are therefore inlined only when they resolve
+ * under the document directory or workspace roots; untrusted local resource
+ * attributes are removed even when raw HTML/CSS sanitization is loose.
+ */
+export function preparePdfHtmlResourcesForExport(
+  html: string,
+  document: vscode.TextDocument,
+  _mode: ExportSanitizeMode,
+  externalLocalImages: ExportExternalLocalImageMode = 'strip'
+): string {
+  if (!html) {
+    return html;
+  }
+
+  const $ = cheerio.load(`<div data-md4h-pdf-resource-root>${html}</div>`);
+
+  const rewriteResourceAttr = (
+    el: Parameters<typeof $>[0],
+    attrName: string,
+    sourceOverride?: string
+  ): void => {
+    const source = (sourceOverride ?? $(el).attr(attrName) ?? '').trim();
+    if (!source || isPdfBrowserSafeResourceSource(source)) {
+      if (sourceOverride && source) {
+        $(el).attr(attrName, source);
+      }
+      return;
+    }
+
+    const trustedImagePath = resolveTrustedWordImagePath(source, document, externalLocalImages);
+    if (!trustedImagePath) {
+      $(el).removeAttr(attrName);
+      return;
+    }
+
+    try {
+      $(el).attr(attrName, imageFileToDataUrl(trustedImagePath));
+    } catch (error) {
+      console.warn('[MD4H] PDF export: Failed to inline local image resource:', error);
+      $(el).removeAttr(attrName);
+    }
+  };
+
+  const rewriteSrcsetAttr = (el: Parameters<typeof $>[0], attrName: string): void => {
+    const srcset = ($(el).attr(attrName) ?? '').trim();
+    if (!srcset) {
+      return;
+    }
+
+    const rewrittenCandidates = srcset
+      .split(',')
+      .map(candidate => candidate.trim())
+      .filter(Boolean)
+      .map(candidate => {
+        const parts = candidate.split(/\s+/);
+        const source = parts.shift() ?? '';
+        const descriptor = parts.join(' ');
+
+        if (!source || isPdfBrowserSafeResourceSource(source)) {
+          return candidate;
+        }
+
+        const trustedImagePath = resolveTrustedWordImagePath(source, document, externalLocalImages);
+        if (!trustedImagePath) {
+          return null;
+        }
+
+        try {
+          const dataUrl = imageFileToDataUrl(trustedImagePath);
+          return descriptor ? `${dataUrl} ${descriptor}` : dataUrl;
+        } catch (error) {
+          console.warn('[MD4H] PDF export: Failed to inline local srcset resource:', error);
+          return null;
+        }
+      })
+      .filter((candidate): candidate is string => Boolean(candidate));
+
+    if (rewrittenCandidates.length > 0) {
+      $(el).attr(attrName, rewrittenCandidates.join(', '));
+    } else {
+      $(el).removeAttr(attrName);
+    }
+  };
+
+  $('img').each((_, el) => {
+    const markdownSrc = $(el).attr('data-markdown-src');
+    const src = $(el).attr('src');
+    rewriteResourceAttr(el, 'src', markdownSrc || src);
+    $(el).removeAttr('data-markdown-src');
+    $(el).removeAttr('srcset');
+  });
+
+  $('source').each((_, el) => {
+    rewriteResourceAttr(el, 'src');
+    rewriteSrcsetAttr(el, 'srcset');
+  });
+
+  $('image, feImage, use').each((_, el) => {
+    rewriteResourceAttr(el, 'href');
+    rewriteResourceAttr(el, 'xlink:href');
+  });
+
+  $('[background]').each((_, el) => {
+    rewriteResourceAttr(el, 'background');
+  });
+
+  $('[poster]').each((_, el) => {
+    rewriteResourceAttr(el, 'poster');
+  });
+
+  $('[style]').each((_, el) => {
+    const style = $(el).attr('style');
+    if (style) {
+      $(el).attr('style', rewriteCssUrlsForPdfExport(style, document, externalLocalImages));
+    }
+  });
+
+  $('style').each((_, el) => {
+    const styleSheet = $(el).html();
+    if (styleSheet) {
+      $(el).text(rewriteCssUrlsForPdfExport(styleSheet, document, externalLocalImages));
+    }
+  });
+
+  return $('[data-md4h-pdf-resource-root]').html() || '';
+}
+
 /**
  * Show export warning dialog and wait for user confirmation
  *
@@ -138,6 +674,10 @@ function getDocumentBasePath(document: vscode.TextDocument): string {
  * @returns true if user confirmed, false if cancelled
  */
 async function showExportWarning(format: string): Promise<boolean> {
+  if (!getConfiguredExportLimitationsWarningEnabled()) {
+    return true;
+  }
+
   const formatName = format === 'pdf' ? 'PDF' : 'Word';
   const message = `Export to ${formatName} works best with simple markdown files.\n\nKnown limitations:\n• Images (especially remote URLs)\n• Mermaid diagrams\n• Complex markdown structures\n\nSome content may not render correctly in the exported document.`;
 
@@ -167,6 +707,9 @@ export async function exportDocument(
   if (!userConfirmed) {
     return; // User cancelled
   }
+
+  const sanitizeMode = getConfiguredExportSanitizeMode(format);
+  const externalLocalImages = getConfiguredExternalLocalImageMode();
 
   // Convert all images (local and remote) to data URLs for embedding
   // html = await convertImagesToDataUrls(html, document);
@@ -211,7 +754,9 @@ export async function exportDocument(
             uri.fsPath,
             progress,
             document,
-            token
+            token,
+            sanitizeMode,
+            externalLocalImages
           );
         } else if (format === 'docx') {
           exportSucceeded = await exportToWord(
@@ -220,7 +765,9 @@ export async function exportDocument(
             exportTheme,
             uri.fsPath,
             progress,
-            document
+            document,
+            sanitizeMode,
+            externalLocalImages
           );
         }
 
@@ -522,12 +1069,14 @@ async function promptForChromePathInlineResolver(
  */
 async function exportToPDF(
   html: string,
-  _mermaidImages: MermaidImage[],
+  mermaidImages: MermaidImage[],
   theme: string,
   outputPath: string,
   progress: vscode.Progress<{ message?: string; increment?: number }>,
   document: vscode.TextDocument,
-  token: vscode.CancellationToken
+  token: vscode.CancellationToken,
+  sanitizeMode: ExportSanitizeMode,
+  externalLocalImages: ExportExternalLocalImageMode
 ): Promise<boolean> {
   progress.report({ message: 'Preparing PDF export…', increment: 20 });
 
@@ -537,14 +1086,23 @@ async function exportToPDF(
   }
 
   // Build complete HTML document
-  const completeHtml = buildExportHTML(html, theme, 'pdf');
+  const exportHtml = preparePdfHtmlResourcesForExport(
+    inlineMermaidImagesForExport(html, mermaidImages),
+    document,
+    sanitizeMode,
+    externalLocalImages
+  );
+  const completeHtml = buildExportHTML(exportHtml, theme, 'pdf', { mode: sanitizeMode });
 
   // Set content with the document's directory as the base URL
   // This allows relative paths (src="./foo.png") to be resolved correctly by Chrome
   const docDir = getDocumentBasePath(document);
 
   // Inject base tag to ensure relative paths are resolved correctly
-  const htmlWithBase = completeHtml.replace('<head>', `<head><base href="file://${docDir}/">`);
+  const htmlWithBase = completeHtml.replace(
+    '<head>',
+    `<head><base href="${buildFileBaseHrefForExport(docDir)}">`
+  );
 
   // Write the HTML to a temp file for Chrome to print
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'md4h-export-'));
@@ -575,7 +1133,7 @@ async function exportToPDF(
       '--disable-software-rasterizer',
       '--disable-dev-shm-usage',
       '--print-to-pdf=' + outputPath,
-      `file://${tempHtmlPath}`,
+      pathToFileURL(tempHtmlPath).href,
     ];
 
     progress.report({ message: 'Rendering PDF...', increment: 30 });
@@ -729,11 +1287,13 @@ export async function findChromeExecutable(): Promise<ChromeDetectionResult> {
  */
 async function exportToWord(
   html: string,
-  _mermaidImages: MermaidImage[],
+  mermaidImages: MermaidImage[],
   theme: string,
   outputPath: string,
   progress: vscode.Progress<{ message?: string; increment?: number }>,
-  document: vscode.TextDocument
+  document: vscode.TextDocument,
+  sanitizeMode: ExportSanitizeMode,
+  externalLocalImages: ExportExternalLocalImageMode
 ): Promise<boolean> {
   progress.report({ message: 'Converting to Word format...', increment: 30 });
 
@@ -745,7 +1305,10 @@ async function exportToWord(
     progress.report({ message: 'Building document...', increment: 30 });
 
     // Parse HTML and convert to docx elements
-    const children = await htmlToDocx(html, docx, theme, document);
+    const exportHtml = sanitizeExportHtml(inlineMermaidImagesForExport(html, mermaidImages), {
+      mode: sanitizeMode,
+    });
+    const children = await htmlToDocx(exportHtml, docx, theme, document, externalLocalImages);
 
     const doc = new docx.Document({
       sections: [
@@ -776,12 +1339,17 @@ async function exportToWord(
 /**
  * Build complete HTML document for PDF export with styling
  */
-function buildExportHTML(contentHtml: string, theme: string, _format: 'pdf' | 'html'): string {
+function buildExportHTML(
+  contentHtml: string,
+  theme: string,
+  _format: 'pdf' | 'html',
+  sanitizeOptions: ExportSanitizeOptions = {}
+): string {
   const styles = getExportStyles(theme);
   // SECURITY: strip script tags, on* handlers, and javascript:/file: URIs
   // before rendering with Chrome. See sanitizeExportHtml() docstring above
   // and SECURITY review §H3.
-  const safeContent = sanitizeExportHtml(contentHtml);
+  const safeContent = sanitizeExportHtml(contentHtml, sanitizeOptions);
 
   return `
     <!DOCTYPE html>
@@ -926,7 +1494,8 @@ async function htmlToDocx(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   docx: any,
   theme: string,
-  document: vscode.TextDocument
+  document: vscode.TextDocument,
+  externalLocalImages: ExportExternalLocalImageMode
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<any[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -943,7 +1512,7 @@ async function htmlToDocx(
   // Cheerio traverses in document order automatically
   // Select all block-level elements we care about
   // We need to use a loop that supports await
-  const elements = $('h1, h2, h3, h4, h5, h6, p, li, blockquote, table').toArray();
+  const elements = $('h1, h2, h3, h4, h5, h6, p, li, blockquote, table, img').toArray();
 
   for (const element of elements) {
     const $el = $(element);
@@ -968,7 +1537,13 @@ async function htmlToDocx(
       }
     } else if (tagName === 'p') {
       // Paragraph - handle mixed content (text, images, links)
-      const paragraphChildren = await parseParagraphChildren($, element, docx, document);
+      const paragraphChildren = await parseParagraphChildren(
+        $,
+        element,
+        docx,
+        document,
+        externalLocalImages
+      );
       if (paragraphChildren.length > 0) {
         children.push(
           new docx.Paragraph({
@@ -979,7 +1554,13 @@ async function htmlToDocx(
       }
     } else if (tagName === 'li') {
       // List item
-      const paragraphChildren = await parseParagraphChildren($, element, docx, document);
+      const paragraphChildren = await parseParagraphChildren(
+        $,
+        element,
+        docx,
+        document,
+        externalLocalImages
+      );
       if (paragraphChildren.length > 0) {
         children.push(
           new docx.Paragraph({
@@ -1006,6 +1587,28 @@ async function htmlToDocx(
                 size: 24,
               },
             },
+          })
+        );
+      }
+    } else if (tagName === 'img') {
+      if ($el.parents('p, li, blockquote, table').length > 0) {
+        continue;
+      }
+
+      const wrapper = $('<p></p>');
+      wrapper.append($el.clone());
+      const paragraphChildren = await parseParagraphChildren(
+        $,
+        wrapper.get(0),
+        docx,
+        document,
+        externalLocalImages
+      );
+      if (paragraphChildren.length > 0) {
+        children.push(
+          new docx.Paragraph({
+            children: paragraphChildren,
+            spacing: { after: 200 },
           })
         );
       }
@@ -1048,7 +1651,8 @@ async function parseParagraphChildren(
   element: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   docx: any,
-  document: vscode.TextDocument
+  document: vscode.TextDocument,
+  externalLocalImages: ExportExternalLocalImageMode
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<any[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1094,23 +1698,13 @@ async function parseParagraphChildren(
               // TODO: Consider adding a user-facing warning when document contains remote images.
               console.warn(`[MD4H] Word export: Skipping remote image: ${resolvableSrc}`);
             } else {
-              // Local file or vscode-webview://
-              let absolutePath = resolvableSrc;
-
-              if (resolvableSrc.startsWith('vscode-webview://')) {
-                // const docDir = path.dirname(document.uri.fsPath);
-                // const decodedSrc = decodeURIComponent(resolvableSrc);
-                // This is a simplification. Real webview resolution is complex.
-                // But if we have data-markdown-src (which we prioritize), it usually has the original path
-                // If resolvableSrc is still webview://, it means we didn't have data-markdown-src
-                // In that case, we might fail to resolve.
-              } else if (!path.isAbsolute(resolvableSrc)) {
-                const docDir = getDocumentBasePath(document);
-                absolutePath = path.resolve(docDir, decodeURIComponent(resolvableSrc));
-              }
-
-              if (fs.existsSync(absolutePath)) {
-                buffer = fs.readFileSync(absolutePath);
+              const trustedImagePath = resolveTrustedWordImagePath(
+                resolvableSrc,
+                document,
+                externalLocalImages
+              );
+              if (trustedImagePath) {
+                buffer = fs.readFileSync(trustedImagePath);
               }
             }
 

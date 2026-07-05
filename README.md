@@ -165,8 +165,31 @@ Customize the editor behavior through VS Code settings. Access via `Ctrl+,` (Set
 
 ### PDF Export Settings
 
+Export trust settings are application-scoped so a workspace cannot change raw HTML, local file, warning, or Chrome executable policy for you.
+
 - **`markdownForHumans.chromePath`** (default: `""`)
   - Path to Google Chrome or Chromium executable for PDF export. Leave empty to auto-detect.
+
+- **`markdownForHumans.export.pdfRawHtmlMode`** (default: `"strict"`)
+  - Controls how raw HTML/CSS is handled during PDF export.
+  - `strict` strips active HTML and raw style blocks.
+  - `styled` keeps style blocks after removing resource-loading CSS.
+  - `looseStyle` keeps authored CSS as written while still stripping active HTML.
+  - `loose` preserves authored raw HTML/CSS for trusted documents.
+
+- **`markdownForHumans.export.wordRawHtmlMode`** (default: `"strict"`)
+  - Controls how raw HTML is handled during Word/DOCX export.
+  - `strict` strips active HTML and raw style blocks.
+  - `loose` preserves authored raw HTML for trusted documents. Authored CSS is not applied to DOCX styling.
+
+- **`markdownForHumans.export.externalLocalImages`** (default: `"strip"`)
+  - Controls whether export can read and embed local image files outside the markdown file directory or open workspace folders.
+  - `strip` includes only document/workspace-local images.
+  - `include` also includes shared local image paths such as `~/pictures/puppy.png`.
+
+- **`markdownForHumans.export.showLimitationsWarning`** (default: `true`)
+  - Show the generic export limitations warning before PDF or Word export.
+  - Set to `false` to skip the warning after you have configured your preferred export policy.
 
 ### Display Settings
 

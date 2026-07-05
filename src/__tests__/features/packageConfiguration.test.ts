@@ -31,4 +31,57 @@ describe('package configuration contributions', () => {
     });
     expect(setting.scope).toBeUndefined();
   });
+
+  it('exposes PDF raw HTML/CSS export policy as a setting', () => {
+    const setting = properties['markdownForHumans.export.pdfRawHtmlMode'];
+
+    expect(setting).toMatchObject({
+      type: 'string',
+      enum: ['strict', 'styled', 'looseStyle', 'loose'],
+      default: 'strict',
+    });
+    expect(setting.scope).toBe('application');
+  });
+
+  it('exposes Word raw HTML export policy as a setting', () => {
+    const setting = properties['markdownForHumans.export.wordRawHtmlMode'];
+
+    expect(setting).toMatchObject({
+      type: 'string',
+      enum: ['strict', 'loose'],
+      default: 'strict',
+    });
+    expect(setting.scope).toBe('application');
+  });
+
+  it('exposes external local image export policy as a setting', () => {
+    const setting = properties['markdownForHumans.export.externalLocalImages'];
+
+    expect(setting).toMatchObject({
+      type: 'string',
+      enum: ['strip', 'include'],
+      default: 'strip',
+    });
+    expect(setting.scope).toBe('application');
+  });
+
+  it('exposes export limitations warning as a setting', () => {
+    const setting = properties['markdownForHumans.export.showLimitationsWarning'];
+
+    expect(setting).toMatchObject({
+      type: 'boolean',
+      default: true,
+    });
+    expect(setting.scope).toBe('application');
+  });
+
+  it('exposes Chrome executable path as an application setting', () => {
+    const setting = properties['markdownForHumans.chromePath'];
+
+    expect(setting).toMatchObject({
+      type: 'string',
+      default: '',
+    });
+    expect(setting.scope).toBe('application');
+  });
 });
