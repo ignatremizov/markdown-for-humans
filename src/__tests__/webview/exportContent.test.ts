@@ -6,7 +6,8 @@
  */
 
 import type { Editor } from '@tiptap/core';
-import { getDocumentTitle } from '../../webview/utils/exportContent';
+import { JSDOM } from 'jsdom';
+import { getDocumentTitle, unwrapRawHtmlBlocksForExport } from '../../webview/utils/exportContent';
 
 // Mock Editor instance with minimal interface
 const createMockEditor = (htmlContent: string): Editor => {
@@ -81,6 +82,27 @@ describe('Export Content Integration', () => {
     // This is a placeholder test for the export flow
     // In a full implementation, we'd test collectExportContent
     expect(true).toBe(true);
+  });
+
+  it('unwraps raw HTML blocks before export so trust modes receive authored HTML', () => {
+    const dom = new JSDOM(
+      [
+        '<article>',
+        '<p>before</p>',
+        '<pre data-raw-html-block class="raw-html-block"><code class="language-html">&lt;style&gt;.reader{color:red}&lt;/style&gt;</code></pre>',
+        '<pre data-raw-html-block class="raw-html-block"><code class="language-html">&lt;div class="note"&gt;Raw&lt;/div&gt;</code></pre>',
+        '<p>after</p>',
+        '</article>',
+      ].join('')
+    );
+    const article = dom.window.document.querySelector('article') as HTMLElement;
+
+    unwrapRawHtmlBlocksForExport(article);
+
+    expect(article.innerHTML).toContain('<style>.reader{color:red}</style>');
+    expect(article.innerHTML).toContain('<div class="note">Raw</div>');
+    expect(article.innerHTML).not.toContain('raw-html-block');
+    expect(article.innerHTML).not.toContain('&lt;style&gt;');
   });
 });
 

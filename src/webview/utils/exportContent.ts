@@ -25,6 +25,23 @@ export interface ExportContent {
 }
 
 /**
+ * Replace editor-only raw HTML code blocks with their authored HTML before export.
+ *
+ * Raw HTML blocks are rendered in the editor as escaped code so users can edit
+ * them safely. Export trust settings are enforced later by the extension host,
+ * so the export payload must carry the authored HTML rather than the escaped
+ * editor presentation.
+ */
+export function unwrapRawHtmlBlocksForExport(root: HTMLElement): void {
+  root.querySelectorAll('pre[data-raw-html-block]').forEach(block => {
+    const rawHtml = (block.querySelector('code') ?? block).textContent ?? '';
+    const template = block.ownerDocument.createElement('template');
+    template.innerHTML = rawHtml;
+    block.replaceWith(template.content.cloneNode(true));
+  });
+}
+
+/**
  * Collect HTML content and Mermaid diagrams from the editor
  *
  * @param editor - TipTap editor instance
@@ -75,6 +92,8 @@ export async function collectExportContent(editor: Editor): Promise<ExportConten
       }
     }
   }
+
+  unwrapRawHtmlBlocksForExport(clonedContent);
 
   const finalHtml = clonedContent.innerHTML;
 

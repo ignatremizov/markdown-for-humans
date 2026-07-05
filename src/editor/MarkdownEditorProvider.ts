@@ -22,6 +22,7 @@ import {
   resolveToggleTarget,
   type EditorThemeSetting,
 } from '../shared/editorTheme';
+import type { MermaidImage } from '../features/documentExport';
 
 const FALLBACK_EXTENSION_ID = 'concretio.markdown-for-humans';
 
@@ -312,9 +313,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return value.filter(entry => this.isOutlineEntry(entry));
   }
 
-  private isExportMermaidImage(
-    value: unknown
-  ): value is { id: string; pngDataUrl: string; originalCode: string; originalSvg: string } {
+  private isExportMermaidImage(value: unknown): value is MermaidImage {
     if (!value || typeof value !== 'object') {
       return false;
     }
@@ -322,7 +321,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return (
       typeof candidate.id === 'string' &&
       typeof candidate.pngDataUrl === 'string' &&
-      typeof candidate.originalCode === 'string' &&
       typeof candidate.originalSvg === 'string'
     );
   }

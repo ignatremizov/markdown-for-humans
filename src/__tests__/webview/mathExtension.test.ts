@@ -159,6 +159,19 @@ describe('KaTeX math extension markdown integration', () => {
     expect(input?.value).toBe('E=mc^2');
   });
 
+  it('stores inline math source on the node view for export', () => {
+    editor = createMathEditor();
+    editor.commands.setContent('Value $E$ here.', { contentType: 'markdown' });
+
+    let inlineMath = document.querySelector('.math-inline-container');
+    expect(inlineMath?.getAttribute('data-latex')).toBe('E');
+
+    editInlineMath('E=mc^2');
+
+    inlineMath = document.querySelector('.math-inline-container');
+    expect(inlineMath?.getAttribute('data-latex')).toBe('E=mc^2');
+  });
+
   it('shows display math as literal fenced source when math rendering is disabled', () => {
     editor = createMathEditor({ renderMath: false, includeInlineMath: false });
 

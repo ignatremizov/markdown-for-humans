@@ -500,6 +500,7 @@ export const MathInline = TiptapNode.create({
       let currentNode = node;
       let source = (currentNode.attrs.latex as string) || currentNode.textContent || '';
 
+      container.setAttribute('data-latex', source);
       renderInlineMath(source, renderedElement);
       container.appendChild(renderedElement);
 
@@ -563,6 +564,7 @@ export const MathInline = TiptapNode.create({
 
           if (nextSource !== source) {
             source = nextSource;
+            container.setAttribute('data-latex', source);
             renderInlineMath(source, renderedElement);
           }
 

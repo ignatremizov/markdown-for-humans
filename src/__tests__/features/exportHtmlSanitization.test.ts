@@ -28,10 +28,12 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
+  buildExportHTML,
   buildFileBaseHrefForExport,
   getConfiguredExportSanitizeMode,
   getConfiguredExportLimitationsWarningEnabled,
   getConfiguredExternalLocalImageMode,
+  htmlToDocx,
   inlineMermaidImagesForExport,
   preparePdfHtmlResourcesForExport,
   resolveTrustedWordImagePath,
@@ -365,6 +367,64 @@ describe('buildFileBaseHrefForExport', () => {
     expect(href).toContain('Markdown%20Docs');
     expect(href).toContain('%23draft%3Fone');
     expect(href.endsWith('/')).toBe(true);
+  });
+});
+
+describe('buildExportHTML', () => {
+  it('includes self-contained KaTeX styles for PDF math rendering', () => {
+    const html = buildExportHTML('<p><span class="katex">x</span></p>', 'light', 'pdf');
+
+    expect(html).toContain('@font-face');
+    expect(html).toContain('.katex');
+    expect(html).toContain('data:font/woff2;base64,');
+  });
+});
+
+describe('htmlToDocx math export', () => {
+  it('converts math containers from LaTeX source instead of rendered KaTeX text', async () => {
+    const textRuns: Array<{ text?: string }> = [];
+    const fakeDocx = {
+      TextRun: jest.fn((options: { text?: string }) => {
+        textRuns.push(options);
+        return { type: 'TextRun', options };
+      }),
+      Paragraph: jest.fn((options: { children?: unknown[]; text?: string }) => ({
+        type: 'Paragraph',
+        options,
+      })),
+      ImageRun: jest.fn((options: unknown) => ({ type: 'ImageRun', options })),
+      HeadingLevel: {
+        HEADING_1: 'heading1',
+        HEADING_2: 'heading2',
+        HEADING_3: 'heading3',
+        HEADING_4: 'heading4',
+        HEADING_5: 'heading5',
+        HEADING_6: 'heading6',
+      },
+    };
+    const document = {
+      uri: vscode.Uri.file('/tmp/doc.md'),
+    } as vscode.TextDocument;
+
+    await htmlToDocx(
+      [
+        '<div class="math-block-container" data-latex="E=mc^2">',
+        '<div class="math-block-rendered"><span class="katex">DUPLICATE BLOCK</span></div>',
+        '</div>',
+        '<p>Area ',
+        '<span class="math-inline-container" data-latex="\\pi r^2"><span class="katex">DUPLICATE INLINE</span></span>',
+        '</p>',
+      ].join(''),
+      fakeDocx,
+      'light',
+      document,
+      'strip'
+    );
+
+    const exportedText = textRuns.map(run => run.text).join('\n');
+    expect(exportedText).toContain('$$\nE=mc^2\n$$');
+    expect(exportedText).toContain('$\\pi r^2$');
+    expect(exportedText).not.toContain('DUPLICATE');
   });
 });
 

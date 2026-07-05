@@ -15,9 +15,14 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
+import { createRequire } from 'module';
 import { fileURLToPath, pathToFileURL } from 'url';
 import * as cheerio from 'cheerio';
 import { imageSize } from 'image-size';
+
+const nodeRequire = createRequire(__filename);
+const KATEX_CSS_MARKER = '/* node_modules/katex/dist/katex.min.css */';
+let cachedKatexExportStyles: string | null = null;
 
 /**
  * Strip active content from HTML before passing it to Chrome for PDF rendering.
@@ -1339,7 +1344,7 @@ async function exportToWord(
 /**
  * Build complete HTML document for PDF export with styling
  */
-function buildExportHTML(
+export function buildExportHTML(
   contentHtml: string,
   theme: string,
   _format: 'pdf' | 'html',
@@ -1482,14 +1487,167 @@ function getExportStyles(theme: string): string {
     }
   `;
 
-  return baseStyles;
+  return `
+    ${baseStyles}
+    ${getKatexExportStyles()}
+
+    .math-block-container {
+      margin: 1em 0;
+    }
+
+    .math-block-rendered {
+      text-align: center;
+    }
+
+    .math-inline-container {
+      display: inline;
+    }
+
+    .math-block-tooltip,
+    .math-block-editor,
+    .math-inline-editor {
+      display: none !important;
+    }
+  `;
+}
+
+function getKatexExportStyles(): string {
+  if (cachedKatexExportStyles !== null) {
+    return cachedKatexExportStyles;
+  }
+
+  const cssSource = readKatexCssSource();
+  if (!cssSource) {
+    cachedKatexExportStyles = '';
+    return cachedKatexExportStyles;
+  }
+
+  cachedKatexExportStyles = inlineKatexFontUrls(cssSource.css, cssSource.baseDir);
+  return cachedKatexExportStyles;
+}
+
+function readKatexCssSource(): { css: string; baseDir: string } | null {
+  const bundledCssPath = path.join(__dirname, 'webview.css');
+  try {
+    if (fs.existsSync(bundledCssPath)) {
+      const bundledCss = fs.readFileSync(bundledCssPath, 'utf8');
+      const markerIndex = bundledCss.indexOf(KATEX_CSS_MARKER);
+      if (markerIndex >= 0) {
+        return { css: bundledCss.slice(markerIndex), baseDir: __dirname };
+      }
+    }
+  } catch (error) {
+    console.warn('[MD4H] PDF export: Failed to read bundled KaTeX CSS:', error);
+  }
+
+  const workspaceKatexCssPath = path.join(
+    process.cwd(),
+    'node_modules',
+    'katex',
+    'dist',
+    'katex.min.css'
+  );
+  try {
+    if (fs.existsSync(workspaceKatexCssPath)) {
+      return {
+        css: fs.readFileSync(workspaceKatexCssPath, 'utf8'),
+        baseDir: path.dirname(workspaceKatexCssPath),
+      };
+    }
+  } catch (error) {
+    console.warn('[MD4H] PDF export: Failed to read workspace KaTeX CSS:', error);
+  }
+
+  try {
+    const katexCssPath = nodeRequire.resolve('katex/dist/katex.min.css');
+    const css = fs.readFileSync(katexCssPath, 'utf8');
+    if (css.includes('@font-face') && css.includes('.katex')) {
+      return {
+        css,
+        baseDir: path.dirname(katexCssPath),
+      };
+    }
+  } catch (error) {
+    console.warn('[MD4H] PDF export: Failed to read KaTeX CSS:', error);
+  }
+
+  return null;
+}
+
+function inlineKatexFontUrls(css: string, baseDir: string): string {
+  return css.replace(/url\((["']?)([^)"']+\.(?:woff2?|ttf))\1\)/g, (match, _quote, urlPath) => {
+    const fontPath = path.resolve(baseDir, urlPath.replace(/^\.\//, ''));
+    try {
+      const buffer = fs.readFileSync(fontPath);
+      const mimeType = getFontMimeType(fontPath);
+      return `url("data:${mimeType};base64,${buffer.toString('base64')}")`;
+    } catch {
+      return match;
+    }
+  });
+}
+
+function getFontMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.woff2') {
+    return 'font/woff2';
+  }
+  if (ext === '.woff') {
+    return 'font/woff';
+  }
+  if (ext === '.ttf') {
+    return 'font/ttf';
+  }
+  return 'application/octet-stream';
 }
 
 /**
  * Convert HTML to docx elements using Cheerio for reliable parsing
  * Handles headings, paragraphs, lists, tables, and images with nested tags
  */
-async function htmlToDocx(
+interface ExportCheerioSelection {
+  attr(name: string): string | undefined;
+  hasClass(name: string): boolean;
+  find(selector: string): ExportCheerioSelection;
+  first(): ExportCheerioSelection;
+  text(): string;
+}
+
+interface ExportCheerioStatic {
+  (node: unknown): ExportCheerioSelection;
+}
+
+function isMathBlockElement($el: ExportCheerioSelection, tagName: string): boolean {
+  return (
+    tagName === 'div' &&
+    ($el.hasClass('math-block-container') ||
+      $el.hasClass('math-block') ||
+      $el.attr('data-type') === 'mathBlock')
+  );
+}
+
+function isInlineMathElement($: ExportCheerioStatic, node: unknown, tagName: string): boolean {
+  if (tagName === 'math-inline') {
+    return true;
+  }
+
+  const $node = $(node);
+  return (
+    tagName === 'span' &&
+    ($node.hasClass('math-inline-container') || $node.attr('data-type') === 'mathInline')
+  );
+}
+
+function extractMathLatex($el: ExportCheerioSelection): string {
+  return (
+    $el.attr('data-latex') ??
+    $el.find('[data-latex]').first().attr('data-latex') ??
+    $el.find('code').first().text() ??
+    ''
+  ).trim();
+}
+
+export async function htmlToDocx(
   html: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   docx: any,
@@ -1512,7 +1670,9 @@ async function htmlToDocx(
   // Cheerio traverses in document order automatically
   // Select all block-level elements we care about
   // We need to use a loop that supports await
-  const elements = $('h1, h2, h3, h4, h5, h6, p, li, blockquote, table, img').toArray();
+  const elements = $(
+    'h1, h2, h3, h4, h5, h6, p, li, blockquote, table, img, .math-block-container, div[data-type="mathBlock"]'
+  ).toArray();
 
   for (const element of elements) {
     const $el = $(element);
@@ -1523,7 +1683,22 @@ async function htmlToDocx(
       continue;
     }
 
-    if (tagName.match(/^h[1-6]$/)) {
+    if (isMathBlockElement($el, tagName)) {
+      const latex = extractMathLatex($el);
+      if (latex) {
+        children.push(
+          new docx.Paragraph({
+            children: [
+              new docx.TextRun({
+                text: `$$\n${latex}\n$$`,
+                font: 'Courier New',
+              }),
+            ],
+            spacing: { before: 200, after: 200 },
+          })
+        );
+      }
+    } else if (tagName.match(/^h[1-6]$/)) {
       // Heading
       const textContent = $el.text().trim();
       if (textContent) {
@@ -1671,7 +1846,17 @@ async function parseParagraphChildren(
       }
     } else if (node.type === 'tag') {
       const tagName = $(node).prop('tagName').toLowerCase();
-      if (tagName === 'img') {
+      if (isInlineMathElement($, node, tagName)) {
+        const latex = extractMathLatex($(node));
+        if (latex) {
+          runs.push(
+            new docx.TextRun({
+              text: `$${latex}$`,
+              font: 'Courier New',
+            })
+          );
+        }
+      } else if (tagName === 'img') {
         // Image
         const src = $(node).attr('src');
         const markdownSrc = $(node).attr('data-markdown-src');
