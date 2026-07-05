@@ -182,6 +182,60 @@
     outline: none;
   }
 
+  /* Git dirty-diff markers (custom webview equivalent of VS Code gutter/overview hints) */
+  #editor.git-change-marker-host {
+    position: relative;
+  }
+
+  .git-change-gutter {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 12px;
+    width: 4px;
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  .git-change-overview {
+    position: fixed;
+    top: 0;
+    right: 4px;
+    bottom: 0;
+    width: 5px;
+    pointer-events: none;
+    z-index: 20;
+  }
+
+  .git-change-gutter-marker,
+  .git-change-overview-marker {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    min-height: 2px;
+    border-radius: 2px;
+  }
+
+  .git-change-gutter-marker.git-change-added,
+  .git-change-overview-marker.git-change-added {
+    background: var(--vscode-editorGutter-addedBackground, var(--vscode-charts-green, #3fb950));
+  }
+
+  .git-change-gutter-marker.git-change-modified,
+  .git-change-overview-marker.git-change-modified {
+    background: var(--vscode-editorGutter-modifiedBackground, var(--vscode-charts-blue, #3794ff));
+  }
+
+  .git-change-gutter-marker.git-change-deleted,
+  .git-change-overview-marker.git-change-deleted {
+    background: var(--vscode-editorGutter-deletedBackground, var(--vscode-charts-red, #f14c4c));
+    min-height: 3px;
+  }
+
+  .git-change-overview-marker {
+    opacity: 0.9;
+  }
+
   /* Ensure drag handles (positioned left of content) are not clipped */
   .markdown-editor {
     overflow-x: visible;

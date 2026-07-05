@@ -23,6 +23,7 @@ import {
   type EditorThemeSetting,
 } from '../shared/editorTheme';
 import type { MermaidImage } from '../features/documentExport';
+import { collectGitChangeMarkers } from './gitChangeMarkers';
 
 const FALLBACK_EXTENSION_ID = 'concretio.markdown-for-humans';
 
@@ -277,6 +278,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   // first time a custom editor opens so tests that never call `resolveCustomTextEditor`
   // don't need this VS Code API on their mock.
   private windowStateListener: vscode.Disposable | undefined;
+  private readonly gitChangeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly lastGitChangePayload = new Map<string, string>();
+  private readonly gitChangeGenerations = new Map<string, number>();
+  private gitWatcherDisposables: vscode.Disposable[] | undefined;
   // --- Audit Search Tuning ---
   /**
    * Minimum length required to attempt ANY file suggestions.
@@ -519,6 +524,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(e => {
       if (e.document.uri.toString() === document.uri.toString()) {
         this.updateWebview(document, webviewPanel.webview);
+        this.scheduleGitChangeMarkers(document, webviewPanel.webview);
       }
     });
 
@@ -534,6 +540,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Send initial content to webview
     this.updateWebview(document, webviewPanel.webview);
+    this.ensureGitWatchers();
+    this.scheduleGitChangeMarkers(document, webviewPanel.webview, 0);
 
     // Listen for configuration changes and update webview
     const configChangeSubscription = vscode.workspace.onDidChangeConfiguration(e => {
@@ -658,6 +666,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       this.pendingEdits.delete(docUri);
       this.lastWebviewContent.delete(docUri);
       this.inFlightApplyEdits.delete(docUri);
+      this.clearGitChangeTimer(docUri);
+      this.gitChangeGenerations.set(docUri, (this.gitChangeGenerations.get(docUri) ?? 0) + 1);
+      this.lastGitChangePayload.delete(docUri);
       if (this.openPanels.get(docUri)?.panel === webviewPanel) {
         this.openPanels.delete(docUri);
       }
@@ -670,8 +681,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   /**
    * Send document content to webview
    * Skips update if it's from a recent webview edit (avoid feedback loop)
+   * unless the webview explicitly requested a ready-time resend.
    */
-  private updateWebview(document: vscode.TextDocument, webview: vscode.Webview) {
+  private updateWebview(document: vscode.TextDocument, webview: vscode.Webview, force = false) {
     const docUri = document.uri.toString();
     const lastEditTime = this.pendingEdits.get(docUri);
     const mode = this.getBlankLineMode();
@@ -680,13 +692,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Skip update if content matches what we already sent from the webview
     const lastSentContent = this.lastWebviewContent.get(docUri);
-    if (lastSentContent !== undefined && lastSentContent === currentContent) {
+    if (!force && lastSentContent !== undefined && lastSentContent === currentContent) {
       return;
     }
 
     // Skip update if this change came from webview within last 100ms
     // This prevents feedback loops while allowing external Git changes to sync
-    if (lastEditTime && Date.now() - lastEditTime < 100) {
+    if (!force && lastEditTime && Date.now() - lastEditTime < 100) {
       return;
     }
 
@@ -739,8 +751,106 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       tablePipeStyle,
       enableMath,
       editorTheme,
+      sourceContentForMarkers: currentContent,
+      sourceLineCount: this.countSourceLines(currentContent),
       vscodeIsDark: this.isVscodeDark(),
     });
+  }
+
+  private countSourceLines(markdown: string): number {
+    if (markdown.length === 0) return 1;
+    const normalized = markdown.endsWith('\n') ? markdown.slice(0, -1) : markdown;
+    if (normalized.length === 0) return 1;
+    return normalized.split(/\r?\n/).length;
+  }
+
+  private clearGitChangeTimer(docUri: string): void {
+    const existing = this.gitChangeRefreshTimers.get(docUri);
+    if (!existing) return;
+    clearTimeout(existing);
+    this.gitChangeRefreshTimers.delete(docUri);
+  }
+
+  private scheduleGitChangeMarkers(
+    document: vscode.TextDocument,
+    webview: vscode.Webview,
+    delayMs = 250,
+    force = false
+  ): void {
+    const docUri = document.uri.toString();
+    this.clearGitChangeTimer(docUri);
+    const generation = (this.gitChangeGenerations.get(docUri) ?? 0) + 1;
+    this.gitChangeGenerations.set(docUri, generation);
+
+    const timer = setTimeout(() => {
+      this.gitChangeRefreshTimers.delete(docUri);
+      void this.sendGitChangeMarkers(document, webview, generation, force);
+    }, delayMs);
+    this.gitChangeRefreshTimers.set(docUri, timer);
+  }
+
+  private async sendGitChangeMarkers(
+    document: vscode.TextDocument,
+    webview: vscode.Webview,
+    generation: number,
+    force = false
+  ): Promise<void> {
+    const docUri = document.uri.toString();
+    const panelEntry = this.openPanels.get(docUri);
+    if (!panelEntry || panelEntry.panel.webview !== webview) return;
+    if (this.gitChangeGenerations.get(docUri) !== generation) return;
+
+    const sourceContent = applyBlankLinePolicy(document.getText(), this.getBlankLineMode());
+    const changes =
+      document.uri.scheme === 'file'
+        ? await collectGitChangeMarkers(document.uri.fsPath, sourceContent)
+        : [];
+    const payload = JSON.stringify({ changes, sourceContent });
+
+    const currentPanelEntry = this.openPanels.get(docUri);
+    if (!currentPanelEntry || currentPanelEntry.panel.webview !== webview) return;
+    if (this.gitChangeGenerations.get(docUri) !== generation) return;
+
+    if (!force && this.lastGitChangePayload.get(docUri) === payload) return;
+
+    const delivered = await webview.postMessage({
+      type: 'gitChangesUpdate',
+      changes,
+      sourceContentForMarkers: sourceContent,
+      sourceLineCount: this.countSourceLines(sourceContent),
+    });
+    if (delivered !== false) {
+      this.lastGitChangePayload.set(docUri, payload);
+    }
+  }
+
+  private refreshAllGitChangeMarkers(): void {
+    for (const { panel, document } of this.openPanels.values()) {
+      this.scheduleGitChangeMarkers(document, panel.webview);
+    }
+  }
+
+  private ensureGitWatchers(): void {
+    if (this.gitWatcherDisposables) return;
+    if (typeof vscode.workspace.createFileSystemWatcher !== 'function') return;
+
+    try {
+      const watchers = [
+        '**/.git/index',
+        '**/.git/HEAD',
+        '**/.git/refs/**',
+        '**/.git/packed-refs',
+      ].map(pattern => vscode.workspace.createFileSystemWatcher(pattern));
+      for (const watcher of watchers) {
+        watcher.onDidChange(() => this.refreshAllGitChangeMarkers());
+        watcher.onDidCreate(() => this.refreshAllGitChangeMarkers());
+        watcher.onDidDelete(() => this.refreshAllGitChangeMarkers());
+        this.context.subscriptions.push(watcher);
+      }
+      this.gitWatcherDisposables = watchers;
+    } catch (error) {
+      console.warn('[MD4H] Failed to initialize Git change marker watchers:', error);
+    }
   }
 
   /**
@@ -789,7 +899,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       }
       case 'ready': {
         // Webview is ready, send initial content and settings
-        this.updateWebview(document, webview);
+        this.updateWebview(document, webview, true);
         // Also send settings separately
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
@@ -835,6 +945,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           editorTheme,
           vscodeIsDark: this.isVscodeDark(),
         });
+        this.scheduleGitChangeMarkers(document, webview, 0, true);
         break;
       }
       case 'outlineUpdated': {

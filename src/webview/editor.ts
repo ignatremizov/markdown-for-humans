@@ -59,6 +59,7 @@ import { buildOutlineFromEditor } from './utils/outline';
 import { NavigationHistory } from './utils/navigationHistory';
 import { scrollToHeading, scrollToPos } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
+import { coerceGitChangeRanges, renderGitChangeMarkers } from './features/gitChangeMarkers';
 
 // Helper function for slug generation (same as in linkDialog)
 function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
@@ -175,6 +176,8 @@ let isDomReady = document.readyState !== 'loading';
 let outlineUpdateTimeout: number | null = null;
 let allowNextHostSyncDespiteRecentEdit = false;
 let allowNextHostSyncDespiteEchoHash = false;
+let currentSourceMarkdown = '';
+let currentSourceLineCount = 1;
 
 // Hash-based sync deduplication (replaces unreliable ignoreNextUpdate boolean)
 let lastSentContentHash: string | null = null;
@@ -450,6 +453,7 @@ function immediateUpdate() {
     }
 
     const markdown = getEditorMarkdownForSync(editor, blankLineMode);
+    updateSourceMarkerContent(markdown);
     trackSentContent(markdown);
     // Save-time policy enforcement (e.g. strip blank lines) should be reflected
     // immediately in the editor UI even if the user just typed.
@@ -494,6 +498,7 @@ function debouncedUpdate(markdown: string) {
       }
 
       // Track content hash to detect and ignore echo updates
+      updateSourceMarkerContent(markdown);
       trackSentContent(markdown);
 
       vscode.postMessage({
@@ -557,6 +562,31 @@ function reinitializeEditorForMathSetting(): void {
   } finally {
     isUpdating = false;
   }
+}
+
+function countSourceLines(markdown: string): number {
+  if (markdown.length === 0) return 1;
+  const normalized = markdown.endsWith('\n') ? markdown.slice(0, -1) : markdown;
+  if (normalized.length === 0) return 1;
+  return normalized.split(/\r?\n/).length;
+}
+
+function updateSourceMarkerContent(markdown: string): void {
+  currentSourceMarkdown = markdown;
+  currentSourceLineCount = countSourceLines(markdown);
+}
+
+function renderGitChangesFromMessage(message: WebviewMessage): void {
+  const root = document.getElementById('editor');
+  if (typeof message.sourceContentForMarkers === 'string') {
+    updateSourceMarkerContent(message.sourceContentForMarkers);
+  }
+  const changes = coerceGitChangeRanges(message.changes);
+  renderGitChangeMarkers(root, {
+    lineCount: currentSourceLineCount,
+    sourceMarkdown: currentSourceMarkdown,
+    changes,
+  });
 }
 
 // TODO: Re-implement code block language badges feature
@@ -1146,6 +1176,11 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     switch (message.type) {
       case 'update':
+        updateSourceMarkerContent(
+          typeof message.sourceContentForMarkers === 'string'
+            ? message.sourceContentForMarkers
+            : message.content
+        );
         // Store skipResizeWarning setting if present
         if (typeof message.skipResizeWarning === 'boolean') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1181,6 +1216,9 @@ window.addEventListener('message', (event: MessageEvent) => {
           return;
         }
         updateEditorContent(message.content);
+        break;
+      case 'gitChangesUpdate':
+        renderGitChangesFromMessage(message);
         break;
       case 'settingsUpdate':
         // Update skipResizeWarning setting

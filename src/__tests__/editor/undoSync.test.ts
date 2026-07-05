@@ -180,6 +180,37 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(webview.postMessage).not.toHaveBeenCalled();
   });
 
+  it('should force webview update when content matches but the webview is ready', () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    const document = createDocument('same content');
+    const webview = { postMessage: jest.fn() };
+
+    (provider as unknown as { lastWebviewContent: Map<string, string> }).lastWebviewContent.set(
+      document.uri.toString(),
+      'same content'
+    );
+
+    (
+      provider as unknown as {
+        updateWebview: (
+          doc: vscode.TextDocument,
+          wv: { postMessage: jest.Mock },
+          force: boolean
+        ) => void;
+      }
+    ).updateWebview(document as unknown as vscode.TextDocument, webview, true);
+
+    expect(webview.postMessage).toHaveBeenCalledTimes(1);
+    expect((webview.postMessage as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        type: 'update',
+        content: 'same content',
+        sourceContentForMarkers: 'same content',
+        sourceLineCount: 1,
+      })
+    );
+  });
+
   it('should send webview update when content differs from last sent payload', () => {
     const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
     const document = createDocument('fresh content');
@@ -213,6 +244,8 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       paragraphSpacingAfter: 0,
       zoom: 100,
       editorTheme: 'vscode',
+      sourceContentForMarkers: 'fresh content',
+      sourceLineCount: 1,
       vscodeIsDark: true,
     });
   });
@@ -260,6 +293,8 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       paragraphSpacingAfter: 0,
       zoom: 100,
       editorTheme: 'vscode',
+      sourceContentForMarkers: 'fresh content',
+      sourceLineCount: 1,
       vscodeIsDark: true,
     });
 
@@ -297,5 +332,47 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(payload.enableMath).toBe(false);
 
     getConfigurationSpy.mockRestore();
+  });
+
+  it('should watch Git refs and packed refs for dirty marker baseline refreshes', () => {
+    const previousWatcher = (vscode.workspace as unknown as { createFileSystemWatcher?: jest.Mock })
+      .createFileSystemWatcher;
+    const watchedPatterns: string[] = [];
+    const createFileSystemWatcher = jest.fn((pattern: string) => {
+      watchedPatterns.push(pattern);
+      return {
+        onDidChange: jest.fn(),
+        onDidCreate: jest.fn(),
+        onDidDelete: jest.fn(),
+        dispose: jest.fn(),
+      };
+    });
+
+    try {
+      (
+        vscode.workspace as unknown as { createFileSystemWatcher?: jest.Mock }
+      ).createFileSystemWatcher = createFileSystemWatcher;
+
+      const context = { subscriptions: [] } as unknown as vscode.ExtensionContext;
+      const provider = new MarkdownEditorProvider(context);
+
+      (provider as unknown as { ensureGitWatchers: () => void }).ensureGitWatchers();
+
+      expect(watchedPatterns).toEqual([
+        '**/.git/index',
+        '**/.git/HEAD',
+        '**/.git/refs/**',
+        '**/.git/packed-refs',
+      ]);
+    } finally {
+      if (previousWatcher) {
+        (
+          vscode.workspace as unknown as { createFileSystemWatcher?: jest.Mock }
+        ).createFileSystemWatcher = previousWatcher;
+      } else {
+        delete (vscode.workspace as unknown as { createFileSystemWatcher?: jest.Mock })
+          .createFileSystemWatcher;
+      }
+    }
   });
 });
