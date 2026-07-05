@@ -111,6 +111,16 @@
       {
         "command": "markdownForHumans.copyAiContextRef",
         "title": "Markdown for Humans: Copy AI Context Reference (@file#lines)"
+      },
+      {
+        "command": "markdownForHumans.navigateBack",
+        "title": "Markdown for Humans: Go Back",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "markdownForHumans.navigateForward",
+        "title": "Markdown for Humans: Go Forward",
+        "icon": "$(arrow-right)"
       }
     ],
     "keybindings": [
@@ -118,6 +128,18 @@
         "command": "markdownForHumans.copyAiContextRef",
         "key": "alt+c",
         "mac": "alt+c",
+        "when": "activeCustomEditorId == 'markdownForHumans.editor'"
+      },
+      {
+        "command": "markdownForHumans.navigateBack",
+        "key": "ctrl+alt+left",
+        "mac": "ctrl+alt+left",
+        "when": "activeCustomEditorId == 'markdownForHumans.editor'"
+      },
+      {
+        "command": "markdownForHumans.navigateForward",
+        "key": "ctrl+alt+right",
+        "mac": "ctrl+alt+right",
         "when": "activeCustomEditorId == 'markdownForHumans.editor'"
       }
     ],
@@ -204,6 +226,11 @@
           "default": "strip",
           "description": "Controls whether extra blank lines are preserved or removed in the editor and saved file."
         },
+        "markdownForHumans.enableMath": {
+          "type": "boolean",
+          "default": true,
+          "description": "Render LaTeX math expressions with KaTeX."
+        },
         "markdownForHumans.imagePreview.hover.enabled": {
           "type": "boolean",
           "default": true,
@@ -233,6 +260,19 @@
           "maximum": 200,
           "description": "Zoom level for the editor as a percentage. 100 = default size, 150 = 50% larger, etc.",
           "scope": "application"
+        },
+        "markdownForHumans.table.pipeStyle": {
+          "type": "string",
+          "enum": [
+            "padded",
+            "compact"
+          ],
+          "enumDescriptions": [
+            "Separator row uses spaces: | :---: | --- |",
+            "Separator row omits spaces: |:-----:|-----|"
+          ],
+          "default": "padded",
+          "description": "Controls spacing in serialized GFM table separator rows. Header and body cells stay padded in both modes."
         },
         "markdownForHumans.display.editorTheme": {
           "type": "string",

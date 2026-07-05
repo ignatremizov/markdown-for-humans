@@ -82,3 +82,94 @@ describe('normalizeBlankLineGreedyTokens', () => {
     expect(extras).toBe(3);
   });
 });
+
+describe('normalizeBlankLineGreedyTokens inline fidelity rewrites', () => {
+  it('rewrites inline HTML tokens in paragraphs to literal text tokens', () => {
+    const tokens = [
+      {
+        type: 'paragraph',
+        raw: 'Press <kbd>Ctrl</kbd>\n',
+        tokens: [
+          { type: 'text', raw: 'Press ', text: 'Press ' },
+          { type: 'html', raw: '<kbd>', text: '<kbd>' },
+          { type: 'text', raw: 'Ctrl', text: 'Ctrl' },
+          { type: 'html', raw: '</kbd>', text: '</kbd>' },
+        ],
+      },
+    ];
+
+    normalizeBlankLineGreedyTokens(tokens);
+
+    const inlines = (tokens[0] as { tokens: Array<{ type: string; text: string }> }).tokens;
+    expect(inlines[1]).toEqual({ type: 'text', raw: '<kbd>', text: '<kbd>' });
+    expect(inlines[3]).toEqual({ type: 'text', raw: '</kbd>', text: '</kbd>' });
+  });
+
+  it('rewrites inline HTML tokens in headings', () => {
+    const tokens = [
+      {
+        type: 'heading',
+        raw: '## Title <!-- omit in toc -->\n',
+        depth: 2,
+        text: 'Title <!-- omit in toc -->',
+        tokens: [
+          { type: 'text', raw: 'Title ', text: 'Title ' },
+          { type: 'html', raw: '<!-- omit in toc -->', text: '<!-- omit in toc -->' },
+        ],
+      },
+    ];
+
+    normalizeBlankLineGreedyTokens(tokens);
+
+    const inlines = (tokens[0] as { tokens: Array<{ type: string; text: string }> }).tokens;
+    expect(inlines[1]).toEqual({
+      type: 'text',
+      raw: '<!-- omit in toc -->',
+      text: '<!-- omit in toc -->',
+    });
+  });
+
+  it('rewrites backslash escape tokens to literal raw escape text', () => {
+    const tokens = [
+      {
+        type: 'paragraph',
+        raw: '\\<class\\>\n',
+        tokens: [
+          { type: 'escape', raw: '\\<', text: '<' },
+          { type: 'text', raw: 'class', text: 'class' },
+          { type: 'escape', raw: '\\>', text: '>' },
+        ],
+      },
+    ];
+
+    normalizeBlankLineGreedyTokens(tokens);
+
+    const inlines = (tokens[0] as { tokens: Array<{ type: string; text: string }> }).tokens;
+    expect(inlines[0]).toEqual({ type: 'text', raw: '\\<', text: '\\<' });
+    expect(inlines[2]).toEqual({ type: 'text', raw: '\\>', text: '\\>' });
+  });
+
+  it('rewrites escape tokens inside table cells', () => {
+    const tokens = [
+      {
+        type: 'table',
+        raw: '| h1 | h2 |\n|---|---|\n| a \\* b | c \\< d |',
+        header: [{ tokens: [{ type: 'text', raw: 'h1', text: 'h1' }] }],
+        rows: [
+          [
+            { tokens: [{ type: 'escape', raw: '\\*', text: '*' }] },
+            { tokens: [{ type: 'escape', raw: '\\<', text: '<' }] },
+          ],
+        ],
+      },
+    ];
+
+    normalizeBlankLineGreedyTokens(tokens);
+
+    const table = tokens[0] as {
+      rows: Array<Array<{ tokens: Array<{ type: string; text: string }> }>>;
+    };
+    expect(table.rows[0][0].tokens[0]).toEqual({ type: 'text', raw: '\\*', text: '\\*' });
+    expect(table.rows[0][1].tokens[0]).toEqual({ type: 'text', raw: '\\<', text: '\\<' });
+  });
+});

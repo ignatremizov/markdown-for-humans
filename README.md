@@ -176,6 +176,10 @@ Customize the editor behavior through VS Code settings. Access via `Ctrl+,` (Set
   - `Always use a light theme` / `Always use a dark theme` keep the editor light or dark regardless of VS Code. When your active VS Code theme already matches the chosen appearance the editor uses that real theme; otherwise it falls back to a built-in light or dark theme.
   - The light/dark toggle button at the end of the editor toolbar switches between light and dark and applies to all open editors.
 
+- **`markdownForHumans.table.pipeStyle`** (default: `"padded"`)
+  - Controls GFM table separator row spacing on save.
+  - `padded` writes separator rows like `| :---: | --- |`; `compact` writes them like `|:-----:|-----|`.
+
 ---
 
 ## More Features
@@ -190,7 +194,7 @@ Customize the editor behavior through VS Code settings. Access via `Ctrl+,` (Set
 
 ![Mermaid Diagrams](https://raw.githubusercontent.com/concretios/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/mermaid_diagram_with_one_diagram_only.gif)
 
-*Create flowcharts, sequence diagrams, Gantt charts, and more with 15 built-in templates.*
+*Create flowcharts, sequence diagrams, Gantt charts, and more with 15 built-in templates plus full-screen preview for large diagrams.*
 
 ### Document Outline
 
@@ -212,9 +216,9 @@ Markdown for Humans includes everything you need for a modern writing experience
 
 - **True WYSIWYG editing** powered by TipTap—see your formatted output as you type
 - **Advanced table editing** with drag-to-resize columns, context menus, and toolbar controls
-- **Mermaid diagrams** with 15 built-in templates and double-click editing
+- **Mermaid diagrams** with 15 built-in templates, double-click editing, and full-screen preview
 - **Code blocks** with syntax highlighting for 11+ languages
-- **Math support** with beautiful LaTeX rendering via KaTeX
+- **Math support** with beautiful LaTeX rendering via KaTeX, configurable with `markdownForHumans.enableMath`
 - **PDF and DOCX export** for sharing your documents
 - **Document outline** with sidebar navigation for quick heading access
 - **Theme support** for Light, Dark, and System themes (inherits your VS Code theme)

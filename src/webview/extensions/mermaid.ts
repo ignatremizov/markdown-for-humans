@@ -151,8 +151,18 @@ export const Mermaid = Node.create({
       const renderElement = document.createElement('div');
       renderElement.classList.add('mermaid-render');
 
+      const fullscreenButton = document.createElement('button');
+      fullscreenButton.type = 'button';
+      fullscreenButton.classList.add('mermaid-zoom-btn');
+      fullscreenButton.title = 'Open full-screen preview';
+      fullscreenButton.setAttribute('aria-label', 'Open full-screen preview');
+      fullscreenButton.innerHTML =
+        '<span class="codicon codicon-screen-full" aria-hidden="true"></span>';
+      fullscreenButton.hidden = true;
+
       container.append(codeElement);
       container.appendChild(renderElement);
+      container.appendChild(fullscreenButton);
 
       // Render mermaid diagram
       const renderDiagram = async () => {
@@ -160,6 +170,7 @@ export const Mermaid = Node.create({
         if (!content) {
           renderElement.innerHTML =
             '<div class="mermaid-placeholder">Enter Mermaid diagram code</div>';
+          fullscreenButton.hidden = true;
           return;
         }
 
@@ -180,6 +191,7 @@ export const Mermaid = Node.create({
           renderElement.innerHTML = svg;
           renderElement.classList.add('rendered');
           codeElement.classList.add('hidden');
+          fullscreenButton.hidden = false;
         } catch (error) {
           console.error('Mermaid rendering error:', error);
           const errorMsg = error instanceof Error ? error.message : 'Invalid diagram syntax';
@@ -190,8 +202,20 @@ export const Mermaid = Node.create({
           renderElement.appendChild(errorDiv);
           renderElement.classList.remove('rendered');
           codeElement.classList.remove('hidden');
+          fullscreenButton.hidden = true;
         }
       };
+
+      fullscreenButton.addEventListener('mousedown', event => {
+        event.stopPropagation();
+      });
+
+      fullscreenButton.addEventListener('click', async event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const { showMermaidPreview } = await import('../features/mermaidPreview');
+        showMermaidPreview(renderElement.innerHTML);
+      });
 
       renderDiagram();
 

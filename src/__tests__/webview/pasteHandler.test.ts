@@ -244,6 +244,21 @@ describe('pasteHandler', () => {
       expect(result.content).toContain('<li>');
     });
 
+    it('should preserve GitHub alert type when pasting alert markdown', () => {
+      const mockDataTransfer = createMockDataTransfer({
+        'text/plain': '> [!IMPORTANT]\n> Keep the alert type\n\nAfter',
+      });
+
+      const result = processPasteContent(mockDataTransfer);
+
+      expect(result.wasConverted).toBe(true);
+      expect(result.isHtml).toBe(true);
+      expect(result.content).toContain('<blockquote data-alert-type="IMPORTANT">');
+      expect(result.content).toContain('Keep the alert type');
+      expect(result.content).not.toContain('[!IMPORTANT]');
+      expect(result.content).toContain('<p>After</p>');
+    });
+
     it('should use plain text when HTML is just a wrapper', () => {
       // VS Code often wraps plain text in spans - should use plain text
       const mockDataTransfer = createMockDataTransfer({

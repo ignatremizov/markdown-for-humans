@@ -6,6 +6,39 @@
 
 import { Editor } from '@tiptap/core';
 
+export function scrollToPos(editor: Editor, pos: number) {
+  editor.commands.setTextSelection(pos);
+  editor.commands.focus();
+
+  requestAnimationFrame(() => {
+    try {
+      const view = editor.view;
+      const domPos = view.domAtPos(pos);
+      let node: Node = domPos.node;
+      if (node.nodeType === Node.TEXT_NODE) {
+        node = node.parentElement as HTMLElement;
+      }
+      const target = node as HTMLElement;
+
+      const toolbar = document.querySelector('.formatting-toolbar');
+      const toolbarHeight = toolbar ? toolbar.getBoundingClientRect().height : 0;
+      const offset = toolbarHeight + 16;
+
+      const scrollContainer = document.documentElement;
+      const targetRect = target.getBoundingClientRect();
+      const currentScrollTop = scrollContainer.scrollTop;
+
+      if (targetRect.top < offset) {
+        scrollContainer.scrollTop = currentScrollTop + targetRect.top - offset;
+      } else if (targetRect.bottom > window.innerHeight) {
+        scrollContainer.scrollTop = currentScrollTop + targetRect.bottom - window.innerHeight + 16;
+      }
+    } catch (error) {
+      console.warn('[MD4H] Could not scroll to position:', error);
+    }
+  });
+}
+
 export function scrollToHeading(editor: Editor, pos: number) {
   // Focus and set selection
   editor.commands.setTextSelection(pos);

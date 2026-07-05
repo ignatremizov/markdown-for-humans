@@ -129,7 +129,7 @@ Cursor position restored
 - **highlight.js** 11.11 - Syntax highlighting for code blocks
 - **lowlight** 2.9 - highlight.js integration for TipTap
 - **Mermaid** 10.6 - Diagram rendering
-- **KaTeX** 0.16 - Math typesetting (configured, not yet active)
+- **KaTeX** 0.16 - Inline and display math rendering
 - **markdown-it** 14.0 - Fallback markdown parser
 
 **Bundle Size:**
@@ -589,26 +589,25 @@ javascript, typescript, python, bash, json, markdown, css, html, xml, sql, java,
 - ✅ Flowcharts, sequence diagrams, class diagrams, etc.
 - ✅ Toggle between code and rendered view
 - ✅ Error handling with user-friendly messages
-- ❌ Interactive editing UI (not yet implemented)
+- ✅ Double-click modal editing
+- ✅ Full-screen zoom/pan preview for large diagrams
 
 ### 4. Math Support (KaTeX)
 
-**Status:** ⚠️ Configured but not fully integrated
+**Status:** Core rendering integrated
 
 **What's Done:**
 - KaTeX library included in dependencies
-- Package.json config for enabling/disabling
-
-**What's Missing:**
 - TipTap extension for inline math (`$...$`)
 - TipTap extension for display math (`$$...$$`)
-- Toolbar buttons for inserting equations
-
-**Planned Implementation:**
-- Custom TipTap node for math blocks
 - Parse `$` and `$$` delimiters
 - Render with KaTeX in read mode
 - Show LaTeX source in edit mode
+- `markdownForHumans.enableMath` setting enables/disables math rendering
+
+**What's Missing:**
+- Toolbar buttons for inserting equations
+- Command/shortcut/slash-command insertion helpers
 
 ### 5. Task Lists
 
@@ -726,10 +725,11 @@ if (Date.now() - lastEditTimestamp < 2000) {
 
 **Advanced Features:**
 - Tables with resize, context menu, toolbar dropdown
-- Mermaid diagrams with toggle view, template dropdown, double-click editing
+- Mermaid diagrams with toggle view, template dropdown, double-click editing, full-screen preview
 - Compact formatting toolbar
 - Theme support (light, dark, system)
 - Document outline sidebar with navigation
+- Insertion-point history navigation (Go Back / Go Forward)
 - Image resize handles with modal editor
 - PDF/HTML export functionality
 - Source view button (opens VS Code native editor)
@@ -755,20 +755,19 @@ if (Date.now() - lastEditTimestamp < 2000) {
 
 **Math Support:**
 - KaTeX library included
-- Configuration options defined
-- ❌ No TipTap extension for rendering math yet
-- ❌ No toolbar buttons for inserting equations
+- TipTap extensions for inline and display math
+- ❌ No toolbar buttons for inserting equations yet
 
 **Settings System:**
 - Configuration schema defined in package.json
-- ❌ Not wired up to webview yet
+- Core editor settings are sent through webview update/settings messages
 - ❌ No UI for changing settings in editor
 
 ### ❌ Not Yet Implemented
 
 **Missing Features:**
 - Source view toggle with scroll sync (basic source view button exists)
-- Math equation editing UI (KaTeX library included but not integrated)
+- Math toolbar/slash-command insertion helpers
 - Frontmatter editor UI (frontmatter rendering exists)
 - Find and replace (VS Code find widget enabled but may need enhancement)
 - Spell check integration
@@ -1131,7 +1130,7 @@ vsce publish patch  # Auto-bumps version and publishes
 | TipTap + ProseMirror | ~500KB | Core editor framework |
 | highlight.js | ~3MB | Syntax highlighting (11 languages) |
 | Mermaid | ~4MB | Diagram rendering |
-| KaTeX | ~1MB | Math typesetting (not yet active) |
+| KaTeX | ~1MB | Inline and display math typesetting |
 | markdown-it | ~500KB | Markdown parsing (fallback) |
 | Other | ~500KB | Utilities, polyfills |
 

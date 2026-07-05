@@ -12,8 +12,9 @@ import type {
   MarkdownToken,
   MarkdownParseHelpers,
 } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Fragment } from '@tiptap/pm/model';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 
 /**
  * GitHub Alerts Extension
@@ -25,6 +26,14 @@ import { Fragment } from '@tiptap/pm/model';
  */
 
 export type AlertType = 'NOTE' | 'TIP' | 'IMPORTANT' | 'WARNING' | 'CAUTION';
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    githubAlerts: {
+      removeGithubAlert: () => ReturnType;
+    };
+  }
+}
 
 export const GitHubAlerts = Node.create({
   name: 'githubAlert',
@@ -241,6 +250,55 @@ export const GitHubAlerts = Node.create({
     helpers: MarkdownRendererHelpers,
     ctx: RenderContext
   ) => string,
+
+  addCommands() {
+    return {
+      removeGithubAlert:
+        () =>
+        ({ state, dispatch }) => {
+          const blockquoteType = state.schema.nodes.blockquote;
+          if (!blockquoteType) {
+            return false;
+          }
+
+          let alertNode: ProseMirrorNode | null = null;
+          let alertPos: number | null = null;
+          const { selection } = state;
+
+          if (selection instanceof NodeSelection && selection.node.type === this.type) {
+            alertNode = selection.node;
+            alertPos = selection.from;
+          } else {
+            const { $from } = selection;
+
+            for (let depth = $from.depth; depth >= 0; depth -= 1) {
+              const node = $from.node(depth);
+
+              if (node.type === this.type) {
+                alertNode = node;
+                alertPos = depth === 0 ? 0 : $from.before(depth);
+                break;
+              }
+            }
+          }
+
+          if (!alertNode || alertPos === null) {
+            return false;
+          }
+
+          if (dispatch) {
+            const blockquoteNode = blockquoteType.create(null, alertNode.content);
+            const tr = state.tr
+              .replaceWith(alertPos, alertPos + alertNode.nodeSize, blockquoteNode)
+              .scrollIntoView();
+
+            dispatch(tr);
+          }
+
+          return true;
+        },
+    };
+  },
 
   addProseMirrorPlugins() {
     const githubAlertType = this.type;

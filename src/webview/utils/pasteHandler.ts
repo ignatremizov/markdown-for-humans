@@ -119,6 +119,12 @@ const md = new MarkdownIt({
   linkify: true,
 });
 
+const GITHUB_ALERT_TYPES = ['NOTE', 'TIP', 'IMPORTANT', 'WARNING', 'CAUTION'] as const;
+
+type MarkdownSegment =
+  | { type: 'alert'; alertType: string; contentLines: string[] }
+  | { type: 'text'; lines: string[] };
+
 /**
  * Check if text looks like markdown (has syntax that needs parsing)
  *
@@ -149,14 +155,59 @@ export function looksLikeMarkdown(text: string): boolean {
 }
 
 /**
- * Convert markdown text to HTML for TipTap insertion
+ * Convert markdown text to HTML for TipTap insertion.
+ *
+ * GitHub alert blocks (`> [!TYPE]`) are converted directly to typed
+ * blockquotes so TipTap's `githubAlert` parser keeps their alert type.
  *
  * @param markdown - Markdown string
  * @returns HTML string
  */
 export function markdownToHtml(markdown: string): string {
   if (!markdown || !markdown.trim()) return '';
-  return md.render(markdown);
+
+  const segments: MarkdownSegment[] = [];
+  const lines = markdown.split('\n');
+  let index = 0;
+
+  while (index < lines.length) {
+    const alertMatch = lines[index].match(/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i);
+
+    if (alertMatch && GITHUB_ALERT_TYPES.includes(alertMatch[1].toUpperCase() as never)) {
+      const alertType = alertMatch[1].toUpperCase();
+      const contentLines: string[] = [];
+      index += 1;
+
+      while (index < lines.length && /^>\s?/.test(lines[index])) {
+        contentLines.push(lines[index].replace(/^>\s?/, ''));
+        index += 1;
+      }
+
+      segments.push({ type: 'alert', alertType, contentLines });
+      continue;
+    }
+
+    const lastSegment = segments[segments.length - 1];
+    if (lastSegment?.type === 'text') {
+      lastSegment.lines.push(lines[index]);
+    } else {
+      segments.push({ type: 'text', lines: [lines[index]] });
+    }
+    index += 1;
+  }
+
+  return segments
+    .map(segment => {
+      if (segment.type === 'alert') {
+        const innerMarkdown = segment.contentLines.join('\n').trim();
+        const innerHtml = innerMarkdown ? md.render(innerMarkdown) : '';
+        return `<blockquote data-alert-type="${segment.alertType}">${innerHtml}</blockquote>`;
+      }
+
+      const text = segment.lines.join('\n');
+      return text.trim() ? md.render(text) : '';
+    })
+    .join('');
 }
 
 /**

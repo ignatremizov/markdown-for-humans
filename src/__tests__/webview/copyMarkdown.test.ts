@@ -36,7 +36,10 @@ Object.defineProperty(global, 'document', {
   writable: true,
 });
 
-import { copyToClipboard } from '../../webview/utils/copyMarkdown';
+import {
+  copyToClipboard,
+  writeSelectionMarkdownToClipboard,
+} from '../../webview/utils/copyMarkdown';
 
 describe('copyMarkdown', () => {
   beforeEach(() => {
@@ -126,6 +129,40 @@ const x = 1;
 
       expect(result.success).toBe(true);
       expect(result.markdown).toBe(markdown);
+    });
+  });
+
+  describe('writeSelectionMarkdownToClipboard', () => {
+    it('writes selected markdown to text/plain clipboard data', () => {
+      const setData = jest.fn();
+      const markdown = '> [!NOTE]\n> Alert content';
+      const editor = {
+        state: {
+          selection: { from: 1, to: 10, empty: false },
+          doc: {
+            slice: jest.fn(() => ({ content: 'selection-content' })),
+            textBetween: jest.fn(),
+          },
+        },
+        schema: {
+          topNodeType: {
+            create: jest.fn(() => ({
+              toJSON: jest.fn(() => ({ type: 'doc', content: [] })),
+            })),
+          },
+        },
+        markdown: {
+          serialize: jest.fn(() => markdown),
+        },
+      };
+
+      const result = writeSelectionMarkdownToClipboard(
+        editor as never,
+        { setData } as unknown as DataTransfer
+      );
+
+      expect(result).toBe(markdown);
+      expect(setData).toHaveBeenCalledWith('text/plain', markdown);
     });
   });
 

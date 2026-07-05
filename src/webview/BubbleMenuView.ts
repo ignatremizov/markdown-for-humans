@@ -402,6 +402,12 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       isActive: () => editor.isActive('githubAlert'),
       items: [
         {
+          label: 'Remove alert',
+          icon: { name: 'quote', fallback: '"' },
+          action: () => editor.chain().focus().removeGithubAlert().run(),
+          isEnabled: () => editor.isActive('githubAlert'),
+        },
+        {
           label: ' Note',
           icon: { name: 'info', fallback: 'ℹ' },
           action: () => {
@@ -575,6 +581,26 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       },
       isActive: () => false,
       className: 'toc-button',
+    },
+    {
+      type: 'dropdown',
+      label: 'Go',
+      title: 'Navigate insertion point history',
+      icon: { name: 'history', fallback: 'Go' },
+      items: [
+        {
+          label: 'Go Back (Ctrl+Alt+Left)',
+          action: () => {
+            window.dispatchEvent(new CustomEvent('navigateBack'));
+          },
+        },
+        {
+          label: 'Go Forward (Ctrl+Alt+Right)',
+          action: () => {
+            window.dispatchEvent(new CustomEvent('navigateForward'));
+          },
+        },
+      ],
     },
     {
       type: 'button',

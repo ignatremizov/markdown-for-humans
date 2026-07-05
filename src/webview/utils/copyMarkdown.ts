@@ -61,6 +61,29 @@ export function getSelectionAsMarkdown(editor: Editor): string | null {
 }
 
 /**
+ * Write the current editor selection to ClipboardEvent clipboard data as clean
+ * markdown. Browser default copy/cut may write TipTap's internal HTML, which
+ * loses custom node metadata such as GitHub alert types.
+ *
+ * @param editor - TipTap editor instance
+ * @param clipboardData - Clipboard data from a copy/cut event
+ * @returns Markdown string written to the clipboard, or null if no selection
+ */
+export function writeSelectionMarkdownToClipboard(
+  editor: Editor,
+  clipboardData: DataTransfer | null
+): string | null {
+  const markdown = getSelectionAsMarkdown(editor);
+
+  if (!markdown || !clipboardData) {
+    return null;
+  }
+
+  clipboardData.setData('text/plain', markdown);
+  return markdown;
+}
+
+/**
  * Convert a selection to basic markdown by analyzing node types
  * This is a fallback when the serializer isn't available
  */

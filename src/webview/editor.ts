@@ -7,6 +7,7 @@
 // Import CSS files (esbuild will bundle these)
 import './editor.css';
 import './codicon.css';
+import 'katex/dist/katex.min.css';
 
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
@@ -26,7 +27,15 @@ import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
-import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
+import { BulletListMarkdownFix } from './extensions/bulletListMarkdownFix';
+import { HtmlPreservingTable, tableRenderOptions } from './extensions/htmlPreservingTable';
+import { RawHtmlBlock } from './extensions/rawHtmlBlock';
+import {
+  MathBlock,
+  MathInline,
+  installMathMarkedExtensions,
+  setMathMarkedTokenizerEnabled,
+} from './extensions/math';
 import { DraggableBlocks } from './extensions/draggableBlocks';
 import { DocumentAuditExtension } from './features/auditDocument';
 import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
@@ -43,11 +52,12 @@ import { toggleTocOverlay } from './features/tocOverlay';
 import { toggleSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
-import { copySelectionAsMarkdown } from './utils/copyMarkdown';
+import { copySelectionAsMarkdown, writeSelectionMarkdownToClipboard } from './utils/copyMarkdown';
 import { copyAiContextReference, type SelectionBlockRange } from './utils/aiContextReference';
 import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
-import { scrollToHeading } from './utils/scrollToHeading';
+import { NavigationHistory } from './utils/navigationHistory';
+import { scrollToHeading, scrollToPos } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
 
 // Helper function for slug generation (same as in linkDialog)
@@ -155,8 +165,8 @@ window.vscode = vscode;
 
 let editor: Editor | null = null;
 let isUpdating = false; // Prevent feedback loops
-let formattingToolbar: HTMLElement;
-let tableMenu: HTMLElement;
+let formattingToolbar: HTMLElement | null = null;
+let tableMenu: HTMLElement | null = null;
 let updateTimeout: number | null = null;
 let lastUserEditTime = 0; // Track when user last edited
 let pendingInitialContent: string | null = null; // Content from host before editor is ready
@@ -175,6 +185,7 @@ const DEBOUNCE_SYNC_MS = 500;
 const SYNC_ECHO_TIMEOUT_MS = 2000;
 const RECENT_EDIT_THRESHOLD_MS = 2000;
 const OUTLINE_UPDATE_DEBOUNCE_MS = 250;
+const navigationHistory = new NavigationHistory();
 
 /**
  * Simple hash function (djb2 algorithm) for content deduplication
@@ -218,6 +229,31 @@ const scheduleOutlineUpdate = () => {
   }, OUTLINE_UPDATE_DEBOUNCE_MS);
 };
 
+const jumpWithSuppressedHistory = (
+  pos: number,
+  scroll: (editorInstance: Editor, targetPos: number) => void
+) => {
+  const editorInstance = editor;
+  if (!editorInstance) return;
+  navigationHistory.suppressDuring(() => {
+    scroll(editorInstance, pos);
+  });
+};
+
+const navigateInsertionHistory = (direction: 'back' | 'forward') => {
+  const pos =
+    direction === 'back' ? navigationHistory.navigateBack() : navigationHistory.navigateForward();
+  if (pos === null) return;
+  jumpWithSuppressedHistory(pos, scrollToPos);
+};
+
+const navigateToDocumentHeading = (pos: number) => {
+  if (!editor) return;
+  navigationHistory.recordPosition(editor.state.selection.from, { immediate: true });
+  navigationHistory.recordPosition(pos, { immediate: true });
+  jumpWithSuppressedHistory(pos, scrollToHeading);
+};
+
 // Pending AI context reference requests, keyed by requestId. The host saves the
 // document and replies with `aiContextRefResponse`; we look up the resolver here.
 const aiContextRefCallbacks = new Map<
@@ -232,6 +268,7 @@ let aiContextSessionSkipSave = false;
 // kept in sync via `update` and `settingsUpdate` messages from the host.
 let aiContextSkipSaveWarningSetting = false;
 let blankLineMode: BlankLineMode = 'strip';
+let mathRenderingEnabled = true;
 
 // Pending document-dirty queries, keyed by requestId. The host replies with
 // `documentDirtyResponse`; we look up the resolver here.
@@ -463,6 +500,58 @@ function debouncedUpdate(markdown: string) {
   }, DEBOUNCE_SYNC_MS);
 }
 
+function readMathSetting(message: WebviewMessage): boolean | null {
+  return typeof message.enableMath === 'boolean' ? message.enableMath : null;
+}
+
+function applyMathSetting(message: WebviewMessage, rebuildExistingEditor: boolean): void {
+  const next = readMathSetting(message);
+  if (next === null || next === mathRenderingEnabled) return;
+
+  mathRenderingEnabled = next;
+  setMathMarkedTokenizerEnabled(true);
+  if (rebuildExistingEditor && editor) {
+    reinitializeEditorForMathSetting();
+  }
+}
+
+function reinitializeEditorForMathSetting(): void {
+  const existingEditor = editor;
+  if (!existingEditor) return;
+
+  const markdown = getEditorMarkdownForSync(existingEditor, blankLineMode);
+  const selectionFrom = existingEditor.state.selection.from;
+  const editorElement = document.querySelector('#editor') as HTMLElement | null;
+
+  isUpdating = true;
+  try {
+    editor = null;
+    existingEditor.destroy();
+    formattingToolbar?.remove();
+    formattingToolbar = null;
+    tableMenu?.remove();
+    tableMenu = null;
+
+    if (editorElement) {
+      editorElement.innerHTML = '';
+    }
+
+    initializeEditor(markdown);
+
+    const reinitializedEditor = editor as Editor | null;
+    if (reinitializedEditor) {
+      try {
+        const endPos = reinitializedEditor.state.doc.content.size;
+        reinitializedEditor.commands.setTextSelection(Math.min(selectionFrom, endPos));
+      } catch {
+        // Best-effort selection restore after the extension set changed.
+      }
+    }
+  } finally {
+    isUpdating = false;
+  }
+}
+
 // TODO: Re-implement code block language badges feature
 // This feature was causing TipTap to not render due to DOM manipulation conflicts
 // Need to find a way to add language badges without interfering with TipTap's rendering
@@ -507,6 +596,11 @@ function initializeEditor(initialContent: string) {
     }
 
     console.log('[MD4H] Initializing editor...');
+    setMathMarkedTokenizerEnabled(true);
+    const mathExtensions = [MathBlock.configure({ render: mathRenderingEnabled })];
+    if (mathRenderingEnabled) {
+      mathExtensions.push(MathInline);
+    }
 
     const editorInstance = new Editor({
       element: editorElement,
@@ -549,6 +643,7 @@ function initializeEditor(initialContent: string) {
           tabSize: 2, // 2 spaces per tab (cleaner for markdown code blocks)
         }),
         BlankLinePreservation, // Converts extra blank lines (space tokens) to empty paragraphs on parse
+        RawHtmlBlock,
         Markdown.configure({
           markedOptions: {
             gfm: true, // GitHub Flavored Markdown for tables, task lists
@@ -561,15 +656,18 @@ function initializeEditor(initialContent: string) {
             class: 'markdown-table',
           },
         }),
+        ...mathExtensions,
         TableRow,
         TableHeader,
         TableCell,
         ListKit.configure({
+          bulletList: false,
           orderedList: false,
           taskItem: {
             nested: true,
           },
         }),
+        BulletListMarkdownFix,
         OrderedListMarkdownFix,
         TabIndentation, // Enable Tab/Shift+Tab for list indentation
         ImageEnterSpacing, // Handle Enter key around images and gap cursor
@@ -647,6 +745,7 @@ function initializeEditor(initialContent: string) {
         try {
           const { from } = editor.state.selection;
           vscode.postMessage({ type: 'selectionChange', pos: from });
+          navigationHistory.recordPosition(from);
         } catch (error) {
           console.warn('[MD4H] Selection update failed:', error);
         }
@@ -655,6 +754,7 @@ function initializeEditor(initialContent: string) {
         console.log('[MD4H] Editor created successfully');
       },
       onDestroy: () => {
+        navigationHistory.dispose();
         console.log('[MD4H] Editor destroyed');
       },
     });
@@ -667,13 +767,13 @@ function initializeEditor(initialContent: string) {
     // works for paragraph-followed-by-blank-lines cases.
     try {
       const markdownStorage = editorInstance as unknown as {
-        markdown?: { instance?: unknown };
-        storage?: { markdown?: { instance?: unknown } };
+        markdown?: unknown;
+        storage?: { markdown?: unknown };
       };
-      const markedInstance =
-        markdownStorage.markdown?.instance ?? markdownStorage.storage?.markdown?.instance;
-      if (markedInstance) {
-        installBlankLineLexerNormalizer(markedInstance);
+      const markdownManager = markdownStorage.markdown ?? markdownStorage.storage?.markdown;
+      if (markdownManager) {
+        installBlankLineLexerNormalizer(markdownManager);
+        installMathMarkedExtensions(markdownManager);
       }
     } catch (error) {
       console.warn('[MD4H] Failed to install blank-line lexer normalizer:', error);
@@ -684,15 +784,22 @@ function initializeEditor(initialContent: string) {
       // Prevent onUpdate from firing during initialization - this was causing
       // documents with frontmatter to be marked dirty even without user edits
       isUpdating = true;
-      editor.commands.setContent(initialContent, { contentType: 'markdown' });
-      isUpdating = false;
+      try {
+        navigationHistory.suppressDuring(() => {
+          editorInstance.commands.setContent(initialContent, { contentType: 'markdown' });
+        });
+      } finally {
+        isUpdating = false;
+      }
     }
+    navigationHistory.seed(editorInstance.state.selection.from);
 
     // Create and insert formatting toolbar at top
-    formattingToolbar = createFormattingToolbar(editorInstance);
+    const toolbar = createFormattingToolbar(editorInstance);
+    formattingToolbar = toolbar;
     const editorContainer = document.querySelector('#editor') as HTMLElement;
     if (editorContainer && editorContainer.parentElement) {
-      editorContainer.parentElement.insertBefore(formattingToolbar, editorContainer);
+      editorContainer.parentElement.insertBefore(toolbar, editorContainer);
     }
 
     // Track editor focus state for toolbar and keep toolbar enabled while interacting with it
@@ -702,7 +809,7 @@ function initializeEditor(initialContent: string) {
     });
     editorDom.addEventListener('blur', (event: FocusEvent) => {
       const relatedTarget = event.relatedTarget as HTMLElement | null;
-      const stayingInToolbar = Boolean(relatedTarget && formattingToolbar?.contains(relatedTarget));
+      const stayingInToolbar = Boolean(relatedTarget && toolbar.contains(relatedTarget));
 
       if (stayingInToolbar) {
         return;
@@ -711,7 +818,7 @@ function initializeEditor(initialContent: string) {
       // relatedTarget can be null; wait a tick to see where focus actually lands
       setTimeout(() => {
         const activeElement = document.activeElement as HTMLElement | null;
-        if (activeElement && formattingToolbar?.contains(activeElement)) {
+        if (activeElement && toolbar.contains(activeElement)) {
           return;
         }
         window.dispatchEvent(new CustomEvent('editorFocusChange', { detail: { focused: false } }));
@@ -719,7 +826,8 @@ function initializeEditor(initialContent: string) {
     });
 
     // Create table menu
-    tableMenu = createTableMenu(editorInstance);
+    const tableMenuElement = createTableMenu(editorInstance);
+    tableMenu = tableMenuElement;
 
     // Setup image drag & drop handling
     setupImageDragDrop(editorInstance, vscode);
@@ -745,12 +853,12 @@ function initializeEditor(initialContent: string) {
 
         if (tableCell && editorInstance.isActive('table')) {
           e.preventDefault();
-          tableMenu.style.display = 'block';
-          tableMenu.style.position = 'fixed';
-          tableMenu.style.left = `${e.clientX}px`;
-          tableMenu.style.top = `${e.clientY}px`;
+          tableMenuElement.style.display = 'block';
+          tableMenuElement.style.position = 'fixed';
+          tableMenuElement.style.left = `${e.clientX}px`;
+          tableMenuElement.style.top = `${e.clientY}px`;
         } else {
-          tableMenu.style.display = 'none';
+          tableMenuElement.style.display = 'none';
         }
       } catch (error) {
         console.error('[MD4H] Error in context menu:', error);
@@ -758,7 +866,7 @@ function initializeEditor(initialContent: string) {
     };
 
     const documentClickHandler = () => {
-      tableMenu.style.display = 'none';
+      tableMenuElement.style.display = 'none';
     };
 
     // Handle keyboard shortcuts
@@ -843,6 +951,20 @@ function initializeEditor(initialContent: string) {
         if (editor) {
           toggleSearchOverlay(editor);
         }
+        return;
+      }
+
+      if (e.ctrlKey && e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left')) {
+        e.preventDefault();
+        e.stopPropagation();
+        navigateInsertionHistory('back');
+        return;
+      }
+
+      if (e.ctrlKey && e.altKey && (e.key === 'ArrowRight' || e.key === 'Right')) {
+        e.preventDefault();
+        e.stopPropagation();
+        navigateInsertionHistory('forward');
         return;
       }
 
@@ -981,6 +1103,14 @@ function initializeEditor(initialContent: string) {
       document.removeEventListener('click', documentClickHandler);
       document.removeEventListener('keydown', keydownHandler);
       editorInstance.view.dom.removeEventListener('click', handleLinkClick);
+      toolbar.remove();
+      tableMenuElement.remove();
+      if (formattingToolbar === toolbar) {
+        formattingToolbar = null;
+      }
+      if (tableMenu === tableMenuElement) {
+        tableMenu = null;
+      }
       console.log('[MD4H] Editor destroyed, global listeners cleaned up');
     });
 
@@ -1020,6 +1150,10 @@ window.addEventListener('message', (event: MessageEvent) => {
         if (message.blankLineMode === 'preserve' || message.blankLineMode === 'strip') {
           blankLineMode = message.blankLineMode;
         }
+        if (message.tablePipeStyle === 'compact' || message.tablePipeStyle === 'padded') {
+          tableRenderOptions.pipeStyle = message.tablePipeStyle;
+        }
+        applyMathSetting(message, Boolean(editor));
         // Store imagePath setting if present
         if (typeof message.imagePath === 'string') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1053,6 +1187,10 @@ window.addEventListener('message', (event: MessageEvent) => {
         if (message.blankLineMode === 'preserve' || message.blankLineMode === 'strip') {
           blankLineMode = message.blankLineMode;
         }
+        if (message.tablePipeStyle === 'compact' || message.tablePipeStyle === 'padded') {
+          tableRenderOptions.pipeStyle = message.tablePipeStyle;
+        }
+        applyMathSetting(message, true);
         // Update imagePath setting
         if (typeof message.imagePath === 'string') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1501,9 +1639,16 @@ window.addEventListener('message', (event: MessageEvent) => {
         break;
       }
       case 'navigateToHeading': {
-        if (!editor) return;
         const pos = message.pos as number;
-        scrollToHeading(editor, pos);
+        navigateToDocumentHeading(pos);
+        break;
+      }
+      case 'navigateBack': {
+        navigateInsertionHistory('back');
+        break;
+      }
+      case 'navigateForward': {
+        navigateInsertionHistory('forward');
         break;
       }
       case 'fileSearchResults': {
@@ -1530,6 +1675,7 @@ function updateEditorContent(markdown: string) {
     console.error('[MD4H] Editor not initialized');
     return;
   }
+  const editorInstance = editor;
 
   try {
     // Hash-based deduplication: skip if this is content we just sent
@@ -1560,29 +1706,32 @@ function updateEditorContent(markdown: string) {
     console.log(`[MD4H] Updating content (${docSize} chars)...`);
 
     // Skip if content is already in sync
-    const currentMarkdown = getEditorMarkdownForSync(editor, blankLineMode);
+    const currentMarkdown = getEditorMarkdownForSync(editorInstance, blankLineMode);
     if (currentMarkdown === markdown) {
       console.log('[MD4H] Update skipped (content unchanged)');
       return;
     }
 
     // Save cursor position
-    const { from, to } = editor.state.selection;
+    const { from, to } = editorInstance.state.selection;
     console.log(`[MD4H] Saving cursor position: ${from}-${to}`);
 
-    // Set content
-    editor.commands.setContent(markdown, { contentType: 'markdown' });
+    navigationHistory.suppressDuring(() => {
+      // Set content
+      editorInstance.commands.setContent(markdown, { contentType: 'markdown' });
 
-    // Restore cursor position
-    try {
-      editor.commands.setTextSelection({ from, to });
-      console.log(`[MD4H] Restored cursor position: ${from}-${to}`);
-    } catch {
-      console.warn('[MD4H] Could not restore exact cursor position, using safe position');
-      // If exact position fails, move to end of document
-      const endPos = editor.state.doc.content.size;
-      editor.commands.setTextSelection(Math.min(from, endPos));
-    }
+      // Restore cursor position
+      try {
+        editorInstance.commands.setTextSelection({ from, to });
+        console.log(`[MD4H] Restored cursor position: ${from}-${to}`);
+      } catch {
+        console.warn('[MD4H] Could not restore exact cursor position, using safe position');
+        // If exact position fails, move to end of document
+        const endPos = editorInstance.state.doc.content.size;
+        editorInstance.commands.setTextSelection(Math.min(from, endPos));
+      }
+    });
+    navigationHistory.seed(editorInstance.state.selection.from);
 
     pushOutlineUpdate();
 
@@ -1679,6 +1828,14 @@ window.addEventListener('toggleTocOutline', () => {
   }
 });
 
+window.addEventListener('navigateBack', () => {
+  navigateInsertionHistory('back');
+});
+
+window.addEventListener('navigateForward', () => {
+  navigateInsertionHistory('forward');
+});
+
 // Handle custom event for document audit from toolbar button
 window.addEventListener('auditDocument', async () => {
   if (!editor) return;
@@ -1715,6 +1872,33 @@ window.addEventListener('copyAsMarkdown', () => {
   if (!editor) return;
   copySelectionAsMarkdown(editor);
 });
+
+document.addEventListener(
+  'copy',
+  (event: ClipboardEvent) => {
+    if (!editor || editor.state.selection.empty) return;
+
+    const markdown = writeSelectionMarkdownToClipboard(editor, event.clipboardData);
+    if (!markdown) return;
+
+    event.preventDefault();
+  },
+  true
+);
+
+document.addEventListener(
+  'cut',
+  (event: ClipboardEvent) => {
+    if (!editor || editor.state.selection.empty) return;
+
+    const markdown = writeSelectionMarkdownToClipboard(editor, event.clipboardData);
+    if (!markdown) return;
+
+    event.preventDefault();
+    editor.commands.deleteSelection();
+  },
+  true
+);
 
 // Handle copy AI context reference from toolbar button
 window.addEventListener('copyAiContextRef', () => {

@@ -87,16 +87,21 @@ function isEmptyLinkLike(tok: RawToken): boolean {
 }
 
 /**
- * Walk a paragraph's inline-token array and replace every empty link/image
- * with a literal-text token carrying that link's raw markdown. Mutates the
- * array in place. Returns whether any rewrite happened.
+ * Walk a paragraph's inline-token array and replace every empty link/image,
+ * raw HTML tag, or backslash-escape token with a literal-text token. Mutates
+ * the array in place. Returns whether any rewrite happened.
  */
 function rewriteEmptyInlines(inlines: RawToken[]): boolean {
   let changed = false;
   for (let i = 0; i < inlines.length; i++) {
     const tok = inlines[i];
     if (!tok) continue;
-    if (isEmptyLinkLike(tok)) {
+    if (tok.type === 'escape') {
+      const text = typeof tok.text === 'string' ? tok.text : '';
+      const raw = typeof tok.raw === 'string' && tok.raw.length > 0 ? tok.raw : `\\${text}`;
+      inlines[i] = { type: 'text', raw, text: raw } as RawToken;
+      changed = true;
+    } else if (isEmptyLinkLike(tok) || tok.type === 'html') {
       const raw = typeof tok.raw === 'string' ? tok.raw : '';
       if (raw.length > 0) {
         inlines[i] = { type: 'text', raw, text: raw } as RawToken;
@@ -109,20 +114,26 @@ function rewriteEmptyInlines(inlines: RawToken[]): boolean {
 
 /**
  * Recursively walk the token tree, applying inline rewriting to every
- * paragraph node we find — including paragraphs nested inside list items
- * and blockquotes. Marked's tree shape:
- *   - `paragraph`: inline tokens in `tokens`
+ * paragraph/heading/text node we find — including those nested inside list
+ * items, blockquotes and headings. Marked's tree shape:
+ *   - `paragraph`, `heading`, `lheading`: inline tokens in `tokens`
  *   - `blockquote`: child blocks in `tokens`
  *   - `list`: child items in `items`
  *   - `list_item`: child blocks in `tokens`
+ *   - `table`: cells in `header` and `rows`, each cell carrying inline tokens
  */
 function normalizeEmptyInlinesDeep(tokens: RawToken[] | undefined): void {
   if (!Array.isArray(tokens)) return;
   for (const token of tokens) {
     if (!token || typeof token.type !== 'string') continue;
-    // `paragraph` (block-level) and `text` (the block-level text token marked
-    // emits for tight list items) both carry their inline tokens in `.tokens`.
-    if (token.type === 'paragraph' || token.type === 'text') {
+    // `paragraph`, `heading`, `lheading` and tight-list `text` blocks all
+    // carry inline tokens in `.tokens`.
+    if (
+      token.type === 'paragraph' ||
+      token.type === 'text' ||
+      token.type === 'heading' ||
+      token.type === 'lheading'
+    ) {
       const inlines = (token as { tokens?: RawToken[] }).tokens;
       if (Array.isArray(inlines)) rewriteEmptyInlines(inlines);
       continue;
@@ -131,8 +142,23 @@ function normalizeEmptyInlinesDeep(tokens: RawToken[] | undefined): void {
       normalizeEmptyInlinesDeep((token as { items?: RawToken[] }).items);
       continue;
     }
-    if (token.type === 'list_item' || token.type === 'blockquote' || token.type === 'table') {
+    if (token.type === 'list_item' || token.type === 'blockquote') {
       normalizeEmptyInlinesDeep((token as { tokens?: RawToken[] }).tokens);
+      continue;
+    }
+    if (token.type === 'table') {
+      const table = token as {
+        header?: { tokens?: RawToken[] }[];
+        rows?: { tokens?: RawToken[] }[][];
+      };
+      for (const cell of table.header ?? []) {
+        if (Array.isArray(cell?.tokens)) rewriteEmptyInlines(cell.tokens);
+      }
+      for (const row of table.rows ?? []) {
+        for (const cell of row ?? []) {
+          if (Array.isArray(cell?.tokens)) rewriteEmptyInlines(cell.tokens);
+        }
+      }
       continue;
     }
   }
@@ -202,18 +228,45 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
  * through `normalizeBlankLineGreedyTokens`. Idempotent: re-installing on the
  * same instance is a no-op.
  */
-export function installBlankLineLexerNormalizer(markedInstance: unknown): void {
-  const inst = markedInstance as {
+export function installBlankLineLexerNormalizer(managerOrMarked: unknown): void {
+  type LexerLike = { lex?: (src: string) => RawToken[] };
+  const inst = managerOrMarked as {
+    instance?: unknown;
     lexer?: (src: string, options?: unknown) => RawToken[];
+    createLexer?: () => LexerLike;
+    encodeTextForMarkdown?: (text: string, node?: unknown, parentNode?: unknown) => string;
     __mdh_blankLineNormalizerInstalled?: boolean;
   };
-  if (!inst || typeof inst.lexer !== 'function') return;
+  if (!inst) return;
   if (inst.__mdh_blankLineNormalizerInstalled) return;
 
-  const original = inst.lexer.bind(inst);
-  inst.lexer = function patchedLexer(src: string, options?: unknown): RawToken[] {
-    const tokens = original(src, options);
-    return normalizeBlankLineGreedyTokens(tokens);
-  };
+  const markedInst = (inst.instance !== undefined ? inst.instance : inst) as typeof inst;
+
+  if (typeof inst.createLexer === 'function') {
+    const originalCreateLexer = inst.createLexer.bind(inst);
+    inst.createLexer = function patchedCreateLexer(): LexerLike {
+      const lexer = originalCreateLexer();
+      if (typeof lexer.lex === 'function') {
+        const originalLex = lexer.lex.bind(lexer);
+        lexer.lex = function patchedLex(src: string): RawToken[] {
+          return normalizeBlankLineGreedyTokens(originalLex(src));
+        };
+      }
+      return lexer;
+    };
+  }
+
+  if (typeof markedInst.lexer === 'function') {
+    const original = markedInst.lexer.bind(markedInst);
+    markedInst.lexer = function patchedLexer(src: string, options?: unknown): RawToken[] {
+      const tokens = original(src, options);
+      return normalizeBlankLineGreedyTokens(tokens);
+    };
+  }
+
+  if (typeof inst.encodeTextForMarkdown === 'function') {
+    inst.encodeTextForMarkdown = (text: string): string => text;
+  }
+
   inst.__mdh_blankLineNormalizerInstalled = true;
 }

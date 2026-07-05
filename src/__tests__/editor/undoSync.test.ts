@@ -202,6 +202,8 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       type: 'update',
       content: 'fresh content',
       blankLineMode: 'strip',
+      tablePipeStyle: 'padded',
+      enableMath: true,
       skipResizeWarning: false,
       skipAiContextSaveWarning: false,
       imagePath: 'images',
@@ -247,6 +249,8 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       type: 'update',
       content: 'fresh content',
       blankLineMode: 'strip',
+      tablePipeStyle: 'padded',
+      enableMath: true,
       skipResizeWarning: false,
       skipAiContextSaveWarning: false,
       imagePath: 'images',
@@ -258,6 +262,39 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       editorTheme: 'vscode',
       vscodeIsDark: true,
     });
+
+    getConfigurationSpy.mockRestore();
+  });
+
+  it('should pass disabled math rendering config to the webview', () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    const document = createDocument('fresh content');
+    const webview = { postMessage: jest.fn() };
+
+    (provider as unknown as { lastWebviewContent: Map<string, string> }).lastWebviewContent.set(
+      document.uri.toString(),
+      'old content'
+    );
+
+    const getConfigurationSpy = jest.spyOn(vscode.workspace, 'getConfiguration');
+    getConfigurationSpy.mockReturnValue({
+      get: (key: string, defaultValue?: unknown) => {
+        if (key === 'markdownForHumans.enableMath') {
+          return false;
+        }
+        return defaultValue;
+      },
+    } as unknown as vscode.WorkspaceConfiguration);
+
+    (
+      provider as unknown as {
+        updateWebview: (doc: vscode.TextDocument, wv: { postMessage: jest.Mock }) => void;
+      }
+    ).updateWebview(document as unknown as vscode.TextDocument, webview);
+
+    expect(webview.postMessage).toHaveBeenCalledTimes(1);
+    const payload = (webview.postMessage as jest.Mock).mock.calls[0][0];
+    expect(payload.enableMath).toBe(false);
 
     getConfigurationSpy.mockRestore();
   });

@@ -9,6 +9,8 @@
 jest.mock('@tiptap/core', () => ({
   Editor: jest.fn(),
   Extension: { create: (config: unknown) => config },
+  Node: { create: (config: unknown) => config },
+  mergeAttributes: (...attrs: Array<Record<string, unknown>>) => Object.assign({}, ...attrs),
 }));
 jest.mock('@tiptap/pm/state', () => ({
   Plugin: class {},
@@ -31,6 +33,7 @@ jest.mock('@tiptap/extension-table', () => ({
 jest.mock('@tiptap/extension-list', () => ({
   __esModule: true,
   ListKit: { configure: () => ({}) },
+  BulletList: { extend: (config: unknown) => config },
   OrderedList: { extend: (config: unknown) => config },
 }));
 jest.mock('@tiptap/extension-link', () => ({
@@ -55,6 +58,11 @@ jest.mock('./../../webview/extensions/blankLinePreservation', () => ({
   BlankLinePreservation: {},
 }));
 jest.mock('./../../webview/extensions/githubAlerts', () => ({ GitHubAlerts: {} }));
+jest.mock('./../../webview/extensions/math', () => ({
+  MathBlock: {},
+  MathInline: {},
+  installMathMarkedExtensions: jest.fn(),
+}));
 jest.mock('./../../webview/BubbleMenuView', () => ({
   createFormattingToolbar: () => ({}),
   createTableMenu: () => ({}),
@@ -75,9 +83,15 @@ jest.mock('./../../webview/utils/pasteHandler', () => ({
   processPasteContent: jest.fn(() => ({ isImage: false, wasConverted: false, content: '' })),
   parseFencedCode: jest.fn(() => null),
 }));
-jest.mock('./../../webview/utils/copyMarkdown', () => ({ copySelectionAsMarkdown: jest.fn() }));
+jest.mock('./../../webview/utils/copyMarkdown', () => ({
+  copySelectionAsMarkdown: jest.fn(),
+  writeSelectionMarkdownToClipboard: jest.fn(),
+}));
 jest.mock('./../../webview/utils/outline', () => ({ buildOutlineFromEditor: jest.fn(() => []) }));
-jest.mock('./../../webview/utils/scrollToHeading', () => ({ scrollToHeading: jest.fn() }));
+jest.mock('./../../webview/utils/scrollToHeading', () => ({
+  scrollToHeading: jest.fn(),
+  scrollToPos: jest.fn(),
+}));
 
 type TestingModule = {
   resetSyncState: () => void;
@@ -131,8 +145,16 @@ describe('webview undo/redo guards', () => {
       now: () => 0,
     };
 
-    const mod = await import('../../webview/editor');
-    testing = mod.__testing;
+    try {
+      const mod = await import('../../webview/editor');
+      testing = mod.__testing;
+    } catch (error) {
+      throw new Error(
+        `Failed to import webview editor test module: ${
+          error instanceof Error ? (error.stack ?? error.message) : String(error)
+        }`
+      );
+    }
   };
 
   beforeEach(async () => {

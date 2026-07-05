@@ -21,7 +21,10 @@
  */
 
 import * as path from 'path';
-import { isPathContainedWithin } from '../../editor/MarkdownEditorProvider';
+import {
+  getWorkspaceRelativePath,
+  isPathContainedWithin,
+} from '../../editor/MarkdownEditorProvider';
 
 describe('isPathContainedWithin (path-traversal defense)', () => {
   const ROOT = path.resolve('/tmp/workspace');
@@ -90,5 +93,21 @@ describe('isPathContainedWithin (path-traversal defense)', () => {
     it('returns false for empty root', () => {
       expect(isPathContainedWithin('/tmp/workspace/x', '')).toBe(false);
     });
+  });
+});
+
+describe('getWorkspaceRelativePath', () => {
+  it('returns a workspace-relative path for files inside the workspace', () => {
+    const workspace = path.resolve('/tmp/workspace');
+    const file = path.join(workspace, 'docs', 'note.md');
+
+    expect(getWorkspaceRelativePath(file, workspace)).toBe('docs/note.md');
+  });
+
+  it('does not misclassify sibling directories that share the workspace prefix', () => {
+    const workspace = path.resolve('/tmp/workspace');
+    const sibling = path.resolve('/tmp/workspace-archive/note.md');
+
+    expect(getWorkspaceRelativePath(sibling, workspace)).toBe('note.md');
   });
 });

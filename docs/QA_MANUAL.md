@@ -61,7 +61,8 @@ Pick one:
 5. Insert a table and resize a column; right-click a cell and use table context menu.
 6. Insert a Mermaid diagram via toolbar, verify it renders; double-click to edit, save.
 7. Insert a GitHub alert (`NOTE` or `WARNING`) from toolbar and type inside it.
-8. Export → PDF (cancel is fine) and Export → Word (cancel is fine).
+8. Type `$E=mc^2$`, confirm it renders, then set `markdownForHumans.enableMath` to `false` and confirm the delimiters stay literal after reload/toggle.
+9. Export → PDF (cancel is fine) and Export → Word (cancel is fine).
 
 ---
 
@@ -218,10 +219,12 @@ Pick one:
     ```
 - Single click highlights the block and shows “Double-click to edit”.
 - Double click opens a modal editor (textarea), `Cmd/Ctrl+S` saves inside the modal.
+- Use the full-screen button on a rendered diagram to zoom, pan, reset, and close with `Esc`.
 
 **What to do**
 - Insert a template and verify rendering.
 - Edit to an invalid diagram and confirm an error UI appears (and source remains accessible).
+- Open full-screen preview on a wide diagram and verify wheel zoom, drag pan, reset, and close.
 
 **Expected**
 - Valid Mermaid renders as SVG.
@@ -323,6 +326,7 @@ Open settings via:
 - `markdownForHumans.imagePathBase` (`relativeToDocument` or `workspaceFolder`)
 - `markdownForHumans.chromePath` (PDF export)
 - `markdownForHumans.imageResize.skipWarning`
+- `markdownForHumans.table.pipeStyle` (`padded` or `compact`)
 
 ---
 
@@ -373,4 +377,3 @@ Actual:
 
 Logs/screenshots:
 ```
-

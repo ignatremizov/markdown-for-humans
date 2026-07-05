@@ -110,6 +110,52 @@ describe('BubbleMenuView', () => {
       // Toolbar should register for selection updates
       expect(editor.on).toHaveBeenCalledWith('selectionUpdate', expect.any(Function));
     });
+
+    it('enables the remove-alert menu item only inside GitHub alerts', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      const removeAlertItem = Array.from(toolbar.querySelectorAll('.toolbar-dropdown-item')).find(
+        item => item.textContent?.includes('Remove alert')
+      ) as HTMLButtonElement | undefined;
+
+      expect(removeAlertItem).toBeDefined();
+      expect(removeAlertItem?.disabled).toBe(true);
+
+      (editor.isActive as jest.Mock).mockImplementation(type => type === 'githubAlert');
+      updateToolbarStates();
+
+      expect(removeAlertItem?.disabled).toBe(false);
+    });
+
+    it('dispatches insertion point history navigation events from the Go menu', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      const navigateBack = jest.fn();
+      const navigateForward = jest.fn();
+      window.addEventListener('navigateBack', navigateBack);
+      window.addEventListener('navigateForward', navigateForward);
+
+      try {
+        const goItems = Array.from(toolbar.querySelectorAll('.toolbar-dropdown-item')).filter(
+          item => item.textContent?.includes('Go ')
+        ) as HTMLButtonElement[];
+
+        expect(goItems.map(item => item.textContent)).toEqual([
+          expect.stringContaining('Go Back'),
+          expect.stringContaining('Go Forward'),
+        ]);
+
+        goItems[0]?.click();
+        goItems[1]?.click();
+
+        expect(navigateBack).toHaveBeenCalledTimes(1);
+        expect(navigateForward).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener('navigateBack', navigateBack);
+        window.removeEventListener('navigateForward', navigateForward);
+      }
+    });
   });
 
   describe('createTableMenu', () => {

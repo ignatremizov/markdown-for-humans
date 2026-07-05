@@ -170,6 +170,17 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return value === 'preserve' ? 'preserve' : 'strip';
   }
 
+  private getTablePipeStyle(): 'padded' | 'compact' {
+    const config = vscode.workspace.getConfiguration();
+    const value = config.get<string>('markdownForHumans.table.pipeStyle', 'padded');
+    return value === 'compact' ? 'compact' : 'padded';
+  }
+
+  private isMathEnabled(): boolean {
+    const config = vscode.workspace.getConfiguration();
+    return config.get<boolean>('markdownForHumans.enableMath', true) !== false;
+  }
+
   private getEditorTheme(): EditorThemeSetting {
     const config = vscode.workspace.getConfiguration();
     const value = config.get<string>('markdownForHumans.display.editorTheme', 'vscode');
@@ -528,6 +539,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
+        e.affectsConfiguration('markdownForHumans.table.pipeStyle') ||
+        e.affectsConfiguration('markdownForHumans.enableMath') ||
         e.affectsConfiguration('markdownForHumans.display.editorTheme')
       ) {
         const config = vscode.workspace.getConfiguration();
@@ -555,6 +568,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
+        const tablePipeStyle = this.getTablePipeStyle();
+        const enableMath = this.isMathEnabled();
         const editorTheme = this.getEditorTheme();
         const vscodeIsDark = this.isVscodeDark();
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
@@ -582,6 +597,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
           blankLineMode,
+          tablePipeStyle,
+          enableMath,
           editorTheme,
           vscodeIsDark,
         });
@@ -695,6 +712,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const paragraphSpacingAfter = config.get<number>('markdownForHumans.paragraph.spacingAfter', 0);
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
     const blankLineMode = this.getBlankLineMode();
+    const tablePipeStyle = this.getTablePipeStyle();
+    const enableMath = this.isMathEnabled();
     const editorTheme = this.getEditorTheme();
 
     webview.postMessage({
@@ -709,6 +728,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       paragraphSpacingAfter: paragraphSpacingAfter,
       zoom: zoom,
       blankLineMode,
+      tablePipeStyle,
+      enableMath,
       editorTheme,
       vscodeIsDark: this.isVscodeDark(),
     });
@@ -787,6 +808,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
+        const tablePipeStyle = this.getTablePipeStyle();
+        const enableMath = this.isMathEnabled();
         const editorTheme = this.getEditorTheme();
         webview.postMessage({
           type: 'settingsUpdate',
@@ -799,6 +822,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
           blankLineMode,
+          tablePipeStyle,
+          enableMath,
           editorTheme,
           vscodeIsDark: this.isVscodeDark(),
         });
@@ -2909,16 +2934,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
    * Get relative path from workspace root
    */
   private getRelativePath(fileUri: vscode.Uri, workspaceUri: vscode.Uri): string {
-    const filePath = fileUri.fsPath;
-    const workspacePath = workspaceUri.fsPath;
-
-    if (filePath.startsWith(workspacePath)) {
-      let relative = path.relative(workspacePath, filePath);
-      relative = relative.replace(/\\/g, '/');
-      return relative;
-    }
-
-    return path.basename(filePath);
+    return getWorkspaceRelativePath(fileUri.fsPath, workspaceUri.fsPath);
   }
 
   /**
@@ -3538,7 +3554,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const frontmatterBlock = match[0].replace(/\s+$/, ''); // keep delimiters
     const body = content.slice(match[0].length);
 
-    const pieces = ['```yaml', frontmatterBlock, '```'];
+    const backtickRuns = frontmatterBlock.match(/`{3,}/g);
+    const fence = backtickRuns
+      ? '`'.repeat(Math.max(...backtickRuns.map(run => run.length)) + 1)
+      : '```';
+
+    const pieces = [`${fence}yaml`, frontmatterBlock, fence];
     if (body.length > 0) {
       // Ensure exactly one blank line between fenced block and body
       const trimmedBody =
@@ -3560,12 +3581,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const newline = usesCrLf ? '\r\n' : '\n';
     const lines = content.split(newline);
 
-    const firstLine = lines[0].trim().toLowerCase();
-    if (firstLine !== '```yaml' && firstLine !== '```yml' && firstLine !== '```json') {
+    const fenceMatch = lines[0]
+      .trim()
+      .toLowerCase()
+      .match(/^(`{3,})(yaml|yml|json)$/);
+    if (!fenceMatch) {
       return content;
     }
+    const fence = fenceMatch[1];
 
-    const closingIndex = lines.findIndex((line, idx) => idx > 0 && line.trim() === '```');
+    const closingIndex = lines.findIndex((line, idx) => idx > 0 && line.trim() === fence);
     if (closingIndex === -1) return content;
 
     const insideLines = lines.slice(1, closingIndex);
@@ -3717,4 +3742,19 @@ export function isPathContainedWithin(
   const root = process.platform === 'win32' ? rootNoSep.toLowerCase() : rootNoSep;
 
   return target === root || target.startsWith(root + path.sep);
+}
+
+/**
+ * Return a slash-normalized workspace-relative path when `filePath` is truly
+ * inside `workspacePath`; otherwise fall back to the basename for display.
+ */
+export function getWorkspaceRelativePath(filePath: string, workspacePath: string): string {
+  const resolvedFile = path.resolve(filePath);
+  const resolvedWorkspace = path.resolve(workspacePath);
+
+  if (isPathContainedWithin(resolvedFile, resolvedWorkspace)) {
+    return path.relative(resolvedWorkspace, resolvedFile).replace(/\\/g, '/');
+  }
+
+  return path.basename(resolvedFile);
 }

@@ -273,13 +273,19 @@ _(To be filled during task refinement)_
 
 ## 7. Implementation Log
 
-_(To be filled during implementation)_
+### 2026-07-04 - Core rendering + setting integrated
+
+- Added TipTap math nodes for inline `$...$` and display `$$...$$` math.
+- Added KaTeX rendering, source editing, parse/serialize tests, and font bundling support.
+- Added `markdownForHumans.enableMath`; the host sends it to the webview and the webview rebuilds the editor when toggled so math can render or remain literal.
+- Still pending from original scope: toolbar/slash/keyboard insertion helpers, richer live-preview UI, and dedicated export verification for math output.
 
 ---
 
 ## 8. Decisions & Tradeoffs
 
-_(To be filled during implementation)_
+- Core rendering landed before insertion UI because fork integration already had the parser/rendering foundation, while toolbar/slash commands require product decisions about where equation controls belong.
+- Disabling math rebuilds the editor from current markdown because TipTap extension sets are fixed at editor construction time.
 
 ---
 
