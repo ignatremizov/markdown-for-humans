@@ -59,7 +59,13 @@ import { buildOutlineFromEditor } from './utils/outline';
 import { NavigationHistory } from './utils/navigationHistory';
 import { scrollToHeading, scrollToPos } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
-import { coerceGitChangeRanges, renderGitChangeMarkers } from './features/gitChangeMarkers';
+import {
+  clearGitHunkDiffWidget,
+  coerceGitChangeRanges,
+  renderGitChangeMarkers,
+  renderGitHunkDiffWidget,
+  type GitChangeRange,
+} from './features/gitChangeMarkers';
 
 // Helper function for slug generation (same as in linkDialog)
 function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
@@ -178,6 +184,8 @@ let allowNextHostSyncDespiteRecentEdit = false;
 let allowNextHostSyncDespiteEchoHash = false;
 let currentSourceMarkdown = '';
 let currentSourceLineCount = 1;
+let currentGitChanges: GitChangeRange[] = [];
+let activeGitHunkIndex: number | null = null;
 
 // Hash-based sync deduplication (replaces unreliable ignoreNextUpdate boolean)
 let lastSentContentHash: string | null = null;
@@ -576,17 +584,78 @@ function updateSourceMarkerContent(markdown: string): void {
   currentSourceLineCount = countSourceLines(markdown);
 }
 
+function closeGitHunkDiff(): void {
+  const root = document.getElementById('editor');
+  clearGitHunkDiffWidget(root);
+  activeGitHunkIndex = null;
+}
+
+function renderGitHunkDiffAtIndex(index: number, options: { scrollIntoView?: boolean } = {}): void {
+  const root = document.getElementById('editor');
+  if (!root || currentGitChanges.length === 0) return;
+
+  const normalizedIndex = Math.max(0, Math.min(currentGitChanges.length - 1, index));
+  activeGitHunkIndex = normalizedIndex;
+
+  renderGitHunkDiffWidget(root, currentGitChanges, normalizedIndex, {
+    onClose: closeGitHunkDiff,
+    onPrevious: () => {
+      const previousIndex =
+        (normalizedIndex - 1 + currentGitChanges.length) % currentGitChanges.length;
+      renderGitHunkDiffAtIndex(previousIndex, { scrollIntoView: true });
+    },
+    onNext: () => {
+      const nextIndex = (normalizedIndex + 1) % currentGitChanges.length;
+      renderGitHunkDiffAtIndex(nextIndex, { scrollIntoView: true });
+    },
+    onRevert: change => {
+      vscode.postMessage({ type: 'revertGitChange', change });
+      closeGitHunkDiff();
+    },
+    scrollIntoView: options.scrollIntoView,
+  });
+}
+
+function showGitHunkDiff(index: number): void {
+  const root = document.getElementById('editor');
+  if (!root) return;
+
+  const activeWidget = root.querySelector('.git-hunk-diff-widget');
+  if (activeGitHunkIndex === index && activeWidget) {
+    closeGitHunkDiff();
+    return;
+  }
+
+  renderGitHunkDiffAtIndex(index);
+}
+
 function renderGitChangesFromMessage(message: WebviewMessage): void {
   const root = document.getElementById('editor');
   if (typeof message.sourceContentForMarkers === 'string') {
     updateSourceMarkerContent(message.sourceContentForMarkers);
   }
   const changes = coerceGitChangeRanges(message.changes);
+  currentGitChanges = changes;
+
+  if (changes.length === 0) {
+    activeGitHunkIndex = null;
+    clearGitHunkDiffWidget(root);
+  } else if (activeGitHunkIndex !== null && activeGitHunkIndex >= changes.length) {
+    activeGitHunkIndex = null;
+    clearGitHunkDiffWidget(root);
+  }
+
   renderGitChangeMarkers(root, {
     lineCount: currentSourceLineCount,
     sourceMarkdown: currentSourceMarkdown,
     changes,
+    activeChangeIndex: activeGitHunkIndex,
+    onMarkerClick: (_change, index) => showGitHunkDiff(index),
   });
+
+  if (activeGitHunkIndex !== null) {
+    renderGitHunkDiffAtIndex(activeGitHunkIndex);
+  }
 }
 
 // TODO: Re-implement code block language badges feature

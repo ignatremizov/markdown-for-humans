@@ -161,6 +161,30 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     );
   });
 
+  it('should apply Git hunk reverts even when markdown renders equivalently', async () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    const document = createDocument('**bold**\n');
+
+    const result = await (
+      provider as unknown as {
+        applyEdit: (
+          content: string,
+          doc: vscode.TextDocument,
+          options: { editReason: 'git-revert' }
+        ) => Promise<boolean>;
+      }
+    ).applyEdit('__bold__', document as unknown as vscode.TextDocument, {
+      editReason: 'git-revert',
+    });
+
+    expect(result).toBe(true);
+    expect(workspace.applyEdit).toHaveBeenCalledTimes(1);
+
+    const lastCall = (workspace.applyEdit as jest.Mock).mock.calls[0][0] as WorkspaceEdit;
+    const replaces = (lastCall as unknown as { replaces?: Array<{ text: string }> }).replaces;
+    expect(replaces?.[0]?.text).toBe('__bold__\n');
+  });
+
   it('should skip webview update when content matches last sent payload', () => {
     const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
     const document = createDocument('same content');

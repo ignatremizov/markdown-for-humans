@@ -22,57 +22,185 @@ export interface GitChangeRange {
   endLine: number;
   /** Original-file line count for deletion-only hunks. */
   deletedLines?: number;
+  /** 1-based line number where the hunk starts in HEAD. */
+  oldStart?: number;
+  /** Number of HEAD lines covered by the hunk. */
+  oldLineCount?: number;
+  /** 1-based line number where the hunk starts in the working tree. */
+  newStart?: number;
+  /** Number of working-tree lines covered by the hunk. */
+  newLineCount?: number;
+  /** HEAD lines for this hunk, excluding unified diff markers. */
+  oldLines?: string[];
+  /** Working-tree lines for this hunk, excluding unified diff markers. */
+  newLines?: string[];
+  /** Working-tree line immediately before a deleted hunk insertion point. */
+  deletedAnchorBeforeLine?: string | null;
+  /** Working-tree line immediately after a deleted hunk insertion point. */
+  deletedAnchorAfterLine?: string | null;
 }
 
 export type GitFileStatus = 'clean' | 'tracked' | 'untracked';
 
 const HUNK_HEADER_PATTERN = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+function buildGitChangeRange(
+  type: GitChangeType,
+  oldStart: number,
+  oldLineCount: number,
+  newStart: number,
+  newLineCount: number,
+  oldLines: string[],
+  newLines: string[]
+): GitChangeRange {
+  if (type === 'added') {
+    return {
+      type,
+      startLine: newStart,
+      endLine: newStart + newLineCount - 1,
+      oldStart,
+      oldLineCount,
+      newStart,
+      newLineCount,
+      oldLines,
+      newLines,
+    };
+  }
+
+  if (type === 'deleted') {
+    const anchorLine = Math.max(1, newStart);
+    return {
+      type,
+      startLine: anchorLine,
+      endLine: anchorLine,
+      deletedLines: oldLineCount,
+      oldStart,
+      oldLineCount,
+      newStart,
+      newLineCount,
+      oldLines,
+      newLines,
+    };
+  }
+
+  return {
+    type,
+    startLine: newStart,
+    endLine: newStart + newLineCount - 1,
+    oldStart,
+    oldLineCount,
+    newStart,
+    newLineCount,
+    oldLines,
+    newLines,
+  };
+}
+
+function parseGitDiffBodyLines(diffLines: string[], startIndex: number) {
+  const oldLines: string[] = [];
+  const newLines: string[] = [];
+  let index = startIndex;
+
+  while (index < diffLines.length && !HUNK_HEADER_PATTERN.test(diffLines[index])) {
+    const line = diffLines[index];
+
+    if (line.startsWith('\\')) {
+      index += 1;
+      continue;
+    }
+
+    if (line.startsWith('-') && !line.startsWith('---')) {
+      oldLines.push(line.slice(1));
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
+      newLines.push(line.slice(1));
+    } else if (line.startsWith(' ')) {
+      const content = line.slice(1);
+      oldLines.push(content);
+      newLines.push(content);
+    }
+
+    index += 1;
+  }
+
+  return { oldLines, newLines, nextIndex: index };
+}
+
 /**
- * Parse a zero-context unified Git diff into current-document line ranges.
+ * Parse a zero-context unified Git diff into current-document hunk ranges.
  *
  * The host requests zero-context unified diffs, so hunk headers contain the
  * range information needed for VS Code-style dirty markers without scanning
- * unchanged source. Replacement hunks are marked modified as a single range;
- * pure insertions/deletions become added/deleted markers.
+ * unchanged source. The hunk body is retained so the webview can show a
+ * localized diff and the extension host can apply hunk-level revert actions.
  */
 export function parseGitDiffHunks(diffText: string): GitChangeRange[] {
   const changes: GitChangeRange[] = [];
+  const diffLines = diffText.split(/\r?\n/);
 
-  for (const line of diffText.split(/\r?\n/)) {
+  for (let index = 0; index < diffLines.length; index += 1) {
+    const line = diffLines[index];
     const match = line.match(HUNK_HEADER_PATTERN);
     if (!match) continue;
 
     const oldStart = Number.parseInt(match[1], 10);
-    const oldCount = match[2] ? Number.parseInt(match[2], 10) : 1;
+    const oldLineCount = match[2] ? Number.parseInt(match[2], 10) : 1;
     const newStart = Number.parseInt(match[3], 10);
-    const newCount = match[4] ? Number.parseInt(match[4], 10) : 1;
+    const newLineCount = match[4] ? Number.parseInt(match[4], 10) : 1;
 
-    if (!Number.isFinite(oldStart) || !Number.isFinite(oldCount) || !Number.isFinite(newStart)) {
+    if (
+      !Number.isFinite(oldStart) ||
+      !Number.isFinite(oldLineCount) ||
+      !Number.isFinite(newStart) ||
+      !Number.isFinite(newLineCount)
+    ) {
       continue;
     }
 
-    if (oldCount === 0 && newCount > 0) {
-      changes.push({ type: 'added', startLine: newStart, endLine: newStart + newCount - 1 });
+    const { oldLines, newLines, nextIndex } = parseGitDiffBodyLines(diffLines, index + 1);
+    index = nextIndex - 1;
+
+    if (oldLineCount === 0 && newLineCount > 0) {
+      changes.push(
+        buildGitChangeRange(
+          'added',
+          oldStart,
+          oldLineCount,
+          newStart,
+          newLineCount,
+          oldLines,
+          newLines
+        )
+      );
       continue;
     }
 
-    if (newCount === 0 && oldCount > 0) {
-      const anchorLine = Math.max(1, newStart);
-      changes.push({
-        type: 'deleted',
-        startLine: anchorLine,
-        endLine: anchorLine,
-        deletedLines: oldCount,
-      });
+    if (newLineCount === 0 && oldLineCount > 0) {
+      changes.push(
+        buildGitChangeRange(
+          'deleted',
+          oldStart,
+          oldLineCount,
+          newStart,
+          newLineCount,
+          oldLines,
+          newLines
+        )
+      );
       continue;
     }
 
-    if (newCount > 0) {
-      changes.push({
-        type: 'modified',
-        startLine: newStart,
-        endLine: newStart + newCount - 1,
-      });
+    if (newLineCount > 0) {
+      changes.push(
+        buildGitChangeRange(
+          'modified',
+          oldStart,
+          oldLineCount,
+          newStart,
+          newLineCount,
+          oldLines,
+          newLines
+        )
+      );
     }
   }
 
@@ -107,10 +235,154 @@ export function isAddedStatus(statusText: string): boolean {
  */
 export function buildAllAddedChanges(content: string): GitChangeRange[] {
   if (content.length === 0) return [];
-  const withoutFinalNewline = content.endsWith('\n') ? content.slice(0, -1) : content;
+  const withoutFinalNewline = content.replace(/\r?\n$/, '');
   if (withoutFinalNewline.length === 0) return [];
-  const lineCount = withoutFinalNewline.split(/\r?\n/).length;
-  return [{ type: 'added', startLine: 1, endLine: lineCount }];
+  const lines = withoutFinalNewline.split(/\r?\n/);
+  return [
+    {
+      type: 'added',
+      startLine: 1,
+      endLine: lines.length,
+      oldStart: 0,
+      oldLineCount: 0,
+      newStart: 1,
+      newLineCount: lines.length,
+      oldLines: [],
+      newLines: lines,
+    },
+  ];
+}
+
+function splitDocumentLines(content: string): {
+  lines: string[];
+  newline: string;
+  hasTrailingNewline: boolean;
+} {
+  const newline = content.includes('\r\n') ? '\r\n' : '\n';
+  const hasTrailingNewline = /\r?\n$/.test(content);
+  const withoutFinalNewline = content.replace(/\r?\n$/, '');
+  return {
+    lines: withoutFinalNewline.length === 0 ? [] : withoutFinalNewline.split(/\r?\n/),
+    newline,
+    hasTrailingNewline,
+  };
+}
+
+function contentLines(content: string): string[] {
+  if (content.length === 0) return [];
+  const withoutFinalNewline = content.replace(/\r?\n$/, '');
+  return withoutFinalNewline.length === 0 ? [] : withoutFinalNewline.split(/\r?\n/);
+}
+
+function deletionInsertIndex(lines: string[], change: GitChangeRange): number {
+  const rawInsertIndex =
+    typeof change.newStart === 'number' && Number.isFinite(change.newStart)
+      ? Math.floor(change.newStart)
+      : change.startLine - 1;
+  return Math.max(0, Math.min(lines.length, rawInsertIndex));
+}
+
+function joinDocumentLines(lines: string[], newline: string, hasTrailingNewline: boolean): string {
+  const joined = lines.join(newline);
+  if (joined.length === 0) {
+    return '';
+  }
+  return hasTrailingNewline ? `${joined}${newline}` : joined;
+}
+
+function lineRangeMatches(
+  lines: string[],
+  startIndex: number,
+  endIndexExclusive: number,
+  expectedLines: string[] | undefined
+): boolean {
+  if (!expectedLines) return true;
+  if (expectedLines.length !== endIndexExclusive - startIndex) return false;
+
+  for (let index = 0; index < expectedLines.length; index += 1) {
+    if (lines[startIndex + index] !== expectedLines[index]) return false;
+  }
+
+  return true;
+}
+
+function hasOwnProperty(value: object, key: keyof GitChangeRange): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function deletedAnchorsMatch(
+  lines: string[],
+  insertIndex: number,
+  change: GitChangeRange
+): boolean {
+  const hasBeforeAnchor = hasOwnProperty(change, 'deletedAnchorBeforeLine');
+  const hasAfterAnchor = hasOwnProperty(change, 'deletedAnchorAfterLine');
+  if (!hasBeforeAnchor && !hasAfterAnchor) return true;
+
+  if (hasBeforeAnchor) {
+    if (change.deletedAnchorBeforeLine === null) {
+      if (insertIndex !== 0) return false;
+    } else if (lines[insertIndex - 1] !== change.deletedAnchorBeforeLine) {
+      return false;
+    }
+  }
+
+  if (hasAfterAnchor) {
+    if (change.deletedAnchorAfterLine === null) {
+      if (insertIndex !== lines.length) return false;
+    } else if (lines[insertIndex] !== change.deletedAnchorAfterLine) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function attachDeletedHunkAnchors(changes: GitChangeRange[], content: string): GitChangeRange[] {
+  const lines = contentLines(content);
+
+  return changes.map(change => {
+    if (change.type !== 'deleted') return change;
+
+    const insertIndex = deletionInsertIndex(lines, change);
+    return {
+      ...change,
+      deletedAnchorBeforeLine: insertIndex > 0 ? lines[insertIndex - 1] : null,
+      deletedAnchorAfterLine: insertIndex < lines.length ? lines[insertIndex] : null,
+    };
+  });
+}
+
+/**
+ * Revert one Git hunk in a markdown document using the hunk lines from HEAD.
+ *
+ * @param content - Current markdown text from the VS Code document
+ * @param change - Hunk range containing the HEAD and working-tree line bodies
+ * @returns Markdown content with the hunk reverted
+ */
+export function revertGitChangeInContent(content: string, change: GitChangeRange): string {
+  const oldLines = Array.isArray(change.oldLines) ? change.oldLines : [];
+  const newLines = Array.isArray(change.newLines) ? change.newLines : undefined;
+  const { lines, newline, hasTrailingNewline } = splitDocumentLines(content);
+
+  if (change.type === 'deleted') {
+    const insertIndex = deletionInsertIndex(lines, change);
+    if (!deletedAnchorsMatch(lines, insertIndex, change)) {
+      return content;
+    }
+
+    lines.splice(insertIndex, 0, ...oldLines);
+    return joinDocumentLines(lines, newline, hasTrailingNewline);
+  }
+
+  const startIndex = Math.max(0, Math.min(lines.length, change.startLine - 1));
+  const endIndexExclusive = Math.max(startIndex, Math.min(lines.length, change.endLine));
+  if (!lineRangeMatches(lines, startIndex, endIndexExclusive, newLines)) {
+    return content;
+  }
+
+  lines.splice(startIndex, endIndexExclusive - startIndex, ...oldLines);
+  return joinDocumentLines(lines, newline, hasTrailingNewline);
 }
 
 /**
@@ -224,7 +496,7 @@ export async function collectGitChangeMarkers(
     }
 
     const diff = await diffTextAgainstHead(headBlob, content);
-    return parseGitDiffHunks(diff);
+    return attachDeletedHunkAnchors(parseGitDiffHunks(diff), content);
   } catch (error) {
     console.warn('[MD4H] Failed to collect Git change markers:', error);
     return [];

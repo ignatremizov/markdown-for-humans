@@ -3,7 +3,9 @@
 import {
   buildSourceBlockRanges,
   coerceGitChangeRanges,
+  gitHunkScrollDurationMs,
   renderGitChangeMarkers,
+  renderGitHunkDiffWidget,
 } from '../../webview/features/gitChangeMarkers';
 
 describe('coerceGitChangeRanges', () => {
@@ -30,6 +32,40 @@ describe('coerceGitChangeRanges', () => {
         { type: 'modified', startLine: 2, endLine: Number.NaN },
       ])
     ).toEqual([]);
+  });
+
+  it('preserves hunk bodies for diff widgets and revert actions', () => {
+    expect(
+      coerceGitChangeRanges([
+        {
+          type: 'modified',
+          startLine: 2,
+          endLine: 2,
+          oldStart: 2,
+          oldLineCount: 1,
+          newStart: 2,
+          newLineCount: 1,
+          oldLines: ['old text'],
+          newLines: ['new text'],
+          deletedAnchorBeforeLine: 'before',
+          deletedAnchorAfterLine: null,
+        },
+      ])
+    ).toEqual([
+      {
+        type: 'modified',
+        startLine: 2,
+        endLine: 2,
+        oldStart: 2,
+        oldLineCount: 1,
+        newStart: 2,
+        newLineCount: 1,
+        oldLines: ['old text'],
+        newLines: ['new text'],
+        deletedAnchorBeforeLine: 'before',
+        deletedAnchorAfterLine: null,
+      },
+    ]);
   });
 });
 
@@ -86,6 +122,9 @@ describe('renderGitChangeMarkers', () => {
     expect(root.querySelector('.git-change-gutter-marker.git-change-added')).not.toBeNull();
     expect(root.querySelector('.git-change-gutter-marker.git-change-modified')).not.toBeNull();
     expect(root.querySelector('.git-change-gutter-marker.git-change-deleted')).not.toBeNull();
+    expect(root.querySelector('.git-change-gutter-marker')?.tagName).toBe('BUTTON');
+    expect(root.querySelector('.git-change-gutter')?.getAttribute('aria-hidden')).toBeNull();
+    expect(root.querySelector('.git-change-overview')?.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('clears existing markers when given no changes', () => {
@@ -186,5 +225,334 @@ describe('renderGitChangeMarkers', () => {
     const marker = root.querySelector('.git-change-gutter-marker') as HTMLElement;
     expect(marker.style.top).toBe('36%');
     expect(marker.style.height).toBe('38.4%');
+  });
+
+  it('calls the marker click callback with the clicked hunk index', () => {
+    const onMarkerClick = jest.fn();
+
+    renderGitChangeMarkers(root, {
+      lineCount: 10,
+      changes: [
+        {
+          type: 'modified',
+          startLine: 3,
+          endLine: 3,
+          oldLines: ['old'],
+          newLines: ['new'],
+        },
+      ],
+      onMarkerClick,
+    });
+
+    const marker = root.querySelector('.git-change-gutter-marker') as HTMLButtonElement;
+    expect(marker.dataset.changeIndex).toBe('0');
+
+    marker.click();
+
+    expect(onMarkerClick).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'modified', oldLines: ['old'], newLines: ['new'] }),
+      0
+    );
+  });
+
+  it('splits mixed replacement-plus-insertion hunks into modified and added visual markers', () => {
+    const onMarkerClick = jest.fn();
+
+    renderGitChangeMarkers(root, {
+      lineCount: 100,
+      changes: [
+        {
+          type: 'modified',
+          startLine: 20,
+          endLine: 24,
+          oldLineCount: 1,
+          newLineCount: 5,
+          oldLines: ['old sentence'],
+          newLines: ['new sentence', '', 'inserted paragraph', '', 'another inserted paragraph'],
+        },
+      ],
+      onMarkerClick,
+    });
+
+    const markers = Array.from(root.querySelectorAll('.git-change-gutter-marker'));
+
+    expect(markers).toHaveLength(2);
+    expect(markers[0].classList.contains('git-change-modified')).toBe(true);
+    expect((markers[0] as HTMLElement).dataset.startLine).toBe('20');
+    expect((markers[0] as HTMLElement).dataset.endLine).toBe('20');
+    expect(markers[1].classList.contains('git-change-added')).toBe(true);
+    expect((markers[1] as HTMLElement).dataset.startLine).toBe('21');
+    expect((markers[1] as HTMLElement).dataset.endLine).toBe('24');
+    expect(markers.map(marker => marker.getAttribute('data-change-index'))).toEqual(['0', '0']);
+
+    (markers[1] as HTMLButtonElement).click();
+
+    expect(onMarkerClick).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'modified',
+        oldLines: ['old sentence'],
+      }),
+      0
+    );
+  });
+});
+
+describe('renderGitHunkDiffWidget', () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<main id="editor"><div class="ProseMirror"></div></main>';
+    root = document.getElementById('editor') as HTMLElement;
+  });
+
+  it('renders old and new hunk lines near the selected gutter marker', () => {
+    renderGitChangeMarkers(root, {
+      lineCount: 10,
+      changes: [{ type: 'modified', startLine: 4, endLine: 4 }],
+    });
+
+    const widget = renderGitHunkDiffWidget(
+      root,
+      [
+        {
+          type: 'modified',
+          startLine: 4,
+          endLine: 4,
+          oldStart: 4,
+          oldLineCount: 1,
+          newStart: 4,
+          newLineCount: 1,
+          oldLines: ['old line'],
+          newLines: ['new line'],
+        },
+      ],
+      0
+    );
+
+    expect(widget).not.toBeNull();
+    expect(root.querySelector('.git-hunk-diff-widget')).not.toBeNull();
+    expect(root.querySelector('.git-change-gutter-marker.git-change-active')).not.toBeNull();
+    expect(root.textContent).toContain('old line');
+    expect(root.textContent).toContain('new line');
+  });
+
+  it('highlights changed tokens inside modified hunk lines', () => {
+    renderGitHunkDiffWidget(
+      root,
+      [
+        {
+          type: 'modified',
+          startLine: 4,
+          endLine: 4,
+          oldStart: 4,
+          newStart: 4,
+          oldLines: ['alpha beta gamma'],
+          newLines: ['alpha delta gamma'],
+        },
+      ],
+      0
+    );
+
+    const oldHighlights = Array.from(
+      root.querySelectorAll('.git-hunk-diff-line-old .git-hunk-diff-token-changed')
+    );
+    const newHighlights = Array.from(
+      root.querySelectorAll('.git-hunk-diff-line-new .git-hunk-diff-token-changed')
+    );
+
+    expect(oldHighlights.map(element => element.textContent)).toEqual(['beta']);
+    expect(newHighlights.map(element => element.textContent)).toEqual(['delta']);
+  });
+
+  it('keeps whitespace-only changes inside inline highlights', () => {
+    renderGitHunkDiffWidget(
+      root,
+      [
+        {
+          type: 'modified',
+          startLine: 4,
+          endLine: 4,
+          oldStart: 4,
+          newStart: 4,
+          oldLines: ['alpha  beta'],
+          newLines: ['alpha beta'],
+        },
+      ],
+      0
+    );
+
+    const oldHighlights = Array.from(
+      root.querySelectorAll('.git-hunk-diff-line-old .git-hunk-diff-token-changed')
+    );
+    const newHighlights = Array.from(
+      root.querySelectorAll('.git-hunk-diff-line-new .git-hunk-diff-token-changed')
+    );
+
+    expect(oldHighlights.map(element => element.textContent)).toEqual(['  ']);
+    expect(newHighlights.map(element => element.textContent)).toEqual([' ']);
+  });
+
+  it('does not leave gaps between adjacent changed words separated by spaces', () => {
+    renderGitHunkDiffWidget(
+      root,
+      [
+        {
+          type: 'modified',
+          startLine: 4,
+          endLine: 4,
+          oldStart: 4,
+          newStart: 4,
+          oldLines: ['alpha beta gamma'],
+          newLines: ['delta epsilon gamma'],
+        },
+      ],
+      0
+    );
+
+    const oldHighlights = Array.from(
+      root.querySelectorAll('.git-hunk-diff-line-old .git-hunk-diff-token-changed')
+    );
+    const newHighlights = Array.from(
+      root.querySelectorAll('.git-hunk-diff-line-new .git-hunk-diff-token-changed')
+    );
+
+    expect(oldHighlights.map(element => element.textContent)).toEqual(['alpha beta']);
+    expect(newHighlights.map(element => element.textContent)).toEqual(['delta epsilon']);
+  });
+
+  it('keeps separate highlights when unchanged words split independent changes', () => {
+    renderGitHunkDiffWidget(
+      root,
+      [
+        {
+          type: 'modified',
+          startLine: 4,
+          endLine: 4,
+          oldStart: 4,
+          newStart: 4,
+          oldLines: ["Finally, Grasha's eyes snap open, glazed and desperate in the dim light."],
+          newLines: [
+            "Finally, Grasha's eyes snap open, her pupils dilated and tracking erratically in the dim light.",
+          ],
+        },
+      ],
+      0
+    );
+
+    const oldHighlights = Array.from(
+      root.querySelectorAll('.git-hunk-diff-line-old .git-hunk-diff-token-changed')
+    );
+    const newHighlights = Array.from(
+      root.querySelectorAll('.git-hunk-diff-line-new .git-hunk-diff-token-changed')
+    );
+
+    expect(oldHighlights.map(element => element.textContent)).toEqual(['glazed', 'desperate']);
+    expect(newHighlights.map(element => element.textContent)).toEqual([
+      'her pupils dilated',
+      'tracking erratically',
+    ]);
+  });
+
+  it('routes widget actions to the provided callbacks', () => {
+    const onClose = jest.fn();
+    const onPrevious = jest.fn();
+    const onNext = jest.fn();
+    const onRevert = jest.fn();
+
+    renderGitHunkDiffWidget(
+      root,
+      [
+        {
+          type: 'added',
+          startLine: 1,
+          endLine: 1,
+          oldLines: [],
+          newLines: ['added'],
+        },
+      ],
+      0,
+      { onClose, onPrevious, onNext, onRevert }
+    );
+
+    (root.querySelector('[data-action="previous"]') as HTMLButtonElement).click();
+    (root.querySelector('[data-action="next"]') as HTMLButtonElement).click();
+    (root.querySelector('[data-action="revert"]') as HTMLButtonElement).click();
+    (root.querySelector('[data-action="close"]') as HTMLButtonElement).click();
+
+    expect(onPrevious).toHaveBeenCalledTimes(1);
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(onRevert).toHaveBeenCalledWith(expect.objectContaining({ type: 'added' }), 0);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('scrolls the hunk widget into view when requested by navigation', () => {
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const originalScrollTo = window.scrollTo;
+    const originalScrollY = window.scrollY;
+    const originalInnerHeight = window.innerHeight;
+    const originalGetBoundingClientRect = window.HTMLElement.prototype.getBoundingClientRect;
+    const scrollTo = jest.fn();
+    window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+      callback((window.performance?.now?.() ?? 0) + 500);
+      return 1;
+    };
+    window.scrollTo = scrollTo;
+    window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      if (this instanceof HTMLElement && this.classList.contains('git-hunk-diff-widget')) {
+        return {
+          x: 0,
+          y: 1200,
+          top: 1200,
+          right: 400,
+          bottom: 1280,
+          left: 0,
+          width: 400,
+          height: 80,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      return originalGetBoundingClientRect.call(this);
+    };
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    try {
+      renderGitHunkDiffWidget(
+        root,
+        [
+          {
+            type: 'modified',
+            startLine: 20,
+            endLine: 20,
+            oldLines: ['old'],
+            newLines: ['new'],
+          },
+        ],
+        0,
+        { scrollIntoView: true }
+      );
+
+      expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number) });
+    } finally {
+      window.requestAnimationFrame = originalRequestAnimationFrame;
+      window.scrollTo = originalScrollTo;
+      window.HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+      Object.defineProperty(window, 'scrollY', { configurable: true, value: originalScrollY });
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('uses shorter relative duration for farther hunk scroll jumps', () => {
+    const nearDistance = 200;
+    const farDistance = 5000;
+    const nearDuration = gitHunkScrollDurationMs(nearDistance);
+    const farDuration = gitHunkScrollDurationMs(farDistance);
+
+    expect(farDuration).toBeGreaterThan(nearDuration);
+    expect(farDistance / farDuration).toBeGreaterThan(nearDistance / nearDuration);
+    expect(farDuration).toBeLessThanOrEqual(360);
   });
 });

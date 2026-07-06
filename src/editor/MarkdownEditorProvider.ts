@@ -23,7 +23,11 @@ import {
   type EditorThemeSetting,
 } from '../shared/editorTheme';
 import type { MermaidImage } from '../features/documentExport';
-import { collectGitChangeMarkers } from './gitChangeMarkers';
+import {
+  collectGitChangeMarkers,
+  revertGitChangeInContent,
+  type GitChangeRange,
+} from './gitChangeMarkers';
 
 const FALLBACK_EXTENSION_ID = 'concretio.markdown-for-humans';
 
@@ -845,6 +849,108 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     }
   }
 
+  private parseStringArray(value: unknown): string[] | null {
+    if (!Array.isArray(value)) return null;
+    return value.every((line): line is string => typeof line === 'string') ? value : null;
+  }
+
+  private parseOptionalNonNegativeInteger(value: unknown): number | undefined {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
+    return Math.floor(value);
+  }
+
+  private parseOptionalAnchorLine(value: unknown): string | null | undefined {
+    if (typeof value === 'string' || value === null) return value;
+    return undefined;
+  }
+
+  private parseGitChangeForRevert(value: unknown): GitChangeRange | null {
+    if (!value || typeof value !== 'object') return null;
+
+    const candidate = value as Record<string, unknown>;
+    const type = candidate.type;
+    if (type !== 'added' && type !== 'modified' && type !== 'deleted') return null;
+
+    if (
+      typeof candidate.startLine !== 'number' ||
+      typeof candidate.endLine !== 'number' ||
+      !Number.isFinite(candidate.startLine) ||
+      !Number.isFinite(candidate.endLine) ||
+      candidate.startLine < 1 ||
+      candidate.endLine < 1
+    ) {
+      return null;
+    }
+
+    const oldLines = this.parseStringArray(candidate.oldLines);
+    const newLines = this.parseStringArray(candidate.newLines);
+    if (!oldLines || !newLines) return null;
+
+    const deletedLines =
+      typeof candidate.deletedLines === 'number' &&
+      Number.isFinite(candidate.deletedLines) &&
+      candidate.deletedLines > 0
+        ? Math.floor(candidate.deletedLines)
+        : undefined;
+    const deletedAnchorBeforeLine = this.parseOptionalAnchorLine(candidate.deletedAnchorBeforeLine);
+    const deletedAnchorAfterLine = this.parseOptionalAnchorLine(candidate.deletedAnchorAfterLine);
+
+    return {
+      type,
+      startLine: Math.min(candidate.startLine, candidate.endLine),
+      endLine: Math.max(candidate.startLine, candidate.endLine),
+      ...(deletedLines ? { deletedLines } : {}),
+      oldStart: this.parseOptionalNonNegativeInteger(candidate.oldStart),
+      oldLineCount: this.parseOptionalNonNegativeInteger(candidate.oldLineCount),
+      newStart: this.parseOptionalNonNegativeInteger(candidate.newStart),
+      newLineCount: this.parseOptionalNonNegativeInteger(candidate.newLineCount),
+      oldLines,
+      newLines,
+      ...(deletedAnchorBeforeLine !== undefined ? { deletedAnchorBeforeLine } : {}),
+      ...(deletedAnchorAfterLine !== undefined ? { deletedAnchorAfterLine } : {}),
+    };
+  }
+
+  private async handleRevertGitChange(
+    message: { type: string; [key: string]: unknown },
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<void> {
+    try {
+      const change = this.parseGitChangeForRevert(message.change);
+      if (!change) {
+        vscode.window.showErrorMessage('Could not revert this change because the hunk is invalid.');
+        return;
+      }
+
+      const currentText = document.getText();
+      const nextText = revertGitChangeInContent(currentText, change);
+      if (nextText === currentText) return;
+
+      const docUri = document.uri.toString();
+      const editPromise = this.applyEdit(nextText, document, { editReason: 'git-revert' });
+      this.inFlightApplyEdits.set(docUri, editPromise);
+
+      try {
+        const applied = await editPromise;
+        if (applied) {
+          this.scheduleGitChangeMarkers(document, webview, 0, true);
+        }
+      } finally {
+        if (this.inFlightApplyEdits.get(docUri) === editPromise) {
+          this.inFlightApplyEdits.delete(docUri);
+        }
+      }
+    } catch (error) {
+      const messageText =
+        error instanceof Error
+          ? `Failed to revert change: ${error.message}`
+          : 'Failed to revert change: Unknown error';
+      vscode.window.showErrorMessage(messageText);
+      console.error('[MD4H] Failed to revert Git change:', error);
+    }
+  }
+
   private ensureGitWatchers(): void {
     if (this.gitWatcherDisposables) return;
     if (typeof vscode.workspace.createFileSystemWatcher !== 'function') return;
@@ -912,6 +1018,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         }
         break;
       }
+      case 'revertGitChange':
+        void this.handleRevertGitChange(message, document, webview);
+        break;
       case 'ready': {
         // Webview is ready, send initial content and settings
         this.updateWebview(document, webview, true);
@@ -3597,7 +3706,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   private async applyEdit(
     content: string,
     document: vscode.TextDocument,
-    options?: { editReason?: 'typing' | 'save-policy-enforce' }
+    options?: { editReason?: 'typing' | 'save-policy-enforce' | 'git-revert' }
   ): Promise<boolean> {
     // Skip if content unchanged (avoid redundant edits)
     const unwrappedContent = this.unwrapFrontmatterFromWebview(content);
@@ -3626,8 +3735,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // signatures to match. Without this, adding or removing blank lines in the
     // WYSIWYG would never reach the TextDocument and the file would stay clean.
     const shouldEnforcePolicy = options?.editReason === 'save-policy-enforce';
+    const shouldForceTextEdit = shouldEnforcePolicy || options?.editReason === 'git-revert';
     const renderEquivalent =
-      !shouldEnforcePolicy && isMarkdownStructurallyEquivalent(normalizedContent, currentText);
+      !shouldForceTextEdit && isMarkdownStructurallyEquivalent(normalizedContent, currentText);
     const blankLineLayoutMatters = blankLineMode === 'preserve';
     const blankLineLayoutMatches =
       !blankLineLayoutMatters || hasSameBlankLineLayout(normalizedContent, currentText);
