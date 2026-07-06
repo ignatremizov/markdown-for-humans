@@ -286,7 +286,7 @@ let aiContextSessionSkipSave = false;
 // Mirrors the user setting `markdownForHumans.copyAiContextRef.skipSaveWarning`,
 // kept in sync via `update` and `settingsUpdate` messages from the host.
 let aiContextSkipSaveWarningSetting = false;
-let blankLineMode: BlankLineMode = 'strip';
+let blankLineMode: BlankLineMode = 'preserve';
 let mathRenderingEnabled = true;
 let gitDiffPeekScrollBehavior: GitHunkScrollBehavior = 'smooth';
 
@@ -2287,6 +2287,9 @@ export const __testing = {
   },
   applyEditorSettingsForTests(message: Record<string, unknown>) {
     applyEditorSettings(message);
+  },
+  getBlankLineModeForTests() {
+    return blankLineMode;
   },
   renderGitChangesFromMessageForTests(message: Record<string, unknown>) {
     renderGitChangesFromMessage(message as WebviewMessage);

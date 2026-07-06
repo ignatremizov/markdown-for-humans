@@ -32,6 +32,17 @@ describe('package configuration contributions', () => {
     expect(setting.scope).toBeUndefined();
   });
 
+  it('preserves explicit blank lines by default', () => {
+    const setting = properties['markdownForHumans.blankLines.mode'];
+
+    expect(setting).toMatchObject({
+      type: 'string',
+      enum: ['preserve', 'strip'],
+      default: 'preserve',
+    });
+    expect(setting.scope).toBeUndefined();
+  });
+
   it('exposes editor side margins as application settings', () => {
     const leftMargin = properties['markdownForHumans.layout.leftMargin'];
     const rightMargin = properties['markdownForHumans.layout.rightMargin'];

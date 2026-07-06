@@ -277,7 +277,7 @@
             "preserve",
             "strip"
           ],
-          "default": "strip",
+          "default": "preserve",
           "description": "Controls whether extra blank lines are preserved or removed in the editor and saved file."
         },
         "markdownForHumans.enableMath": {

@@ -182,7 +182,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
   private getBlankLineMode(): BlankLineMode {
     const config = vscode.workspace.getConfiguration();
-    const value = config.get<string>('markdownForHumans.blankLines.mode', 'strip');
+    const value = config.get<string>('markdownForHumans.blankLines.mode', 'preserve');
     return value === 'preserve' ? 'preserve' : 'strip';
   }
 

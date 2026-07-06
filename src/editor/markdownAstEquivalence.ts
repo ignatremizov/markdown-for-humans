@@ -73,9 +73,11 @@ export function isMarkdownStructurallyEquivalent(a: string, b: string): boolean 
 }
 
 /**
- * Signature of a markdown source's blank-line layout: the sequence of
- * newline-run lengths in document order, joined as `"len1,len2,..."`. Two
- * strings with the same signature have identical blank-line spacing.
+ * Signature of a markdown source's blank-line layout: the sequence of blank
+ * gaps (runs of two or more newlines) in document order, joined as
+ * `"len1,len2,..."`. Single newlines are soft-wrap/list-row formatting, not
+ * blank-line spacing, and a final single trailing newline is markdownlint
+ * housekeeping rather than layout.
  *
  * In preserve mode the user explicitly opted in to keeping blank-line counts,
  * so `isMarkdownStructurallyEquivalent` alone is too loose — it renders both
@@ -85,7 +87,8 @@ export function isMarkdownStructurallyEquivalent(a: string, b: string): boolean 
  * behaviour for cosmetic round-trips.
  */
 export function blankLineLayoutSignature(source: string): string {
-  return (source.match(/\n+/g) ?? []).map(run => run.length).join(',');
+  const normalized = source.replace(/\r\n/g, '\n');
+  return (normalized.match(/\n{2,}/g) ?? []).map(run => run.length).join(',');
 }
 
 /**

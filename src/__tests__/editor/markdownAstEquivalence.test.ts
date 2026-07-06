@@ -4,7 +4,10 @@
  * Licensed under the MIT License. See LICENSE file in the project root for details.
  */
 
-import { isMarkdownStructurallyEquivalent } from '../../editor/markdownAstEquivalence';
+import {
+  hasSameBlankLineLayout,
+  isMarkdownStructurallyEquivalent,
+} from '../../editor/markdownAstEquivalence';
 
 describe('isMarkdownStructurallyEquivalent', () => {
   describe('returns true for cosmetic-only differences (lint-style preferences)', () => {
@@ -159,5 +162,19 @@ describe('isMarkdownStructurallyEquivalent', () => {
 
       expect(isMarkdownStructurallyEquivalent(lintFriendly, canonical)).toBe(true);
     });
+  });
+});
+
+describe('hasSameBlankLineLayout', () => {
+  test('ignores a final single trailing newline', () => {
+    expect(hasSameBlankLineLayout('Alpha\n', 'Alpha')).toBe(true);
+  });
+
+  test('ignores soft-wrapped paragraph line breaks', () => {
+    expect(hasSameBlankLineLayout('Alpha beta\ngamma', 'Alpha beta gamma')).toBe(true);
+  });
+
+  test('detects changed blank-line gaps between blocks', () => {
+    expect(hasSameBlankLineLayout('Alpha\n\nBeta', 'Alpha\n\n\nBeta')).toBe(false);
   });
 });

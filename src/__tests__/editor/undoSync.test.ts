@@ -256,7 +256,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(payload).toEqual({
       type: 'update',
       content: 'fresh content',
-      blankLineMode: 'strip',
+      blankLineMode: 'preserve',
       tablePipeStyle: 'padded',
       enableMath: true,
       skipResizeWarning: false,
@@ -309,7 +309,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(payload).toEqual({
       type: 'update',
       content: 'fresh content',
-      blankLineMode: 'strip',
+      blankLineMode: 'preserve',
       tablePipeStyle: 'padded',
       enableMath: true,
       skipResizeWarning: false,

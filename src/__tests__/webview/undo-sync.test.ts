@@ -101,6 +101,7 @@ type TestingModule = {
   isCodeContextForPasteForTests: (event: ClipboardEvent) => boolean;
   insertRawCodeTextForTests: (text: string) => void;
   applyEditorSettingsForTests: (message: Record<string, unknown>) => void;
+  getBlankLineModeForTests: () => 'preserve' | 'strip';
   isPlainFindShortcutForTests: (event: {
     key: string;
     ctrlKey?: boolean;
@@ -277,6 +278,10 @@ describe('webview undo/redo guards', () => {
     expect(testing.isPlainFindShortcutForTests({ key: 'f', ctrlKey: true, altKey: true })).toBe(
       false
     );
+  });
+
+  it('preserves explicit blank lines before host settings arrive', () => {
+    expect(testing.getBlankLineModeForTests()).toBe('preserve');
   });
 
   it('applies layout width settings as editor CSS variables', () => {

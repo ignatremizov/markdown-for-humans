@@ -136,27 +136,20 @@ heading → "\n\n" → empty paragraph → "\n\n" → content
 ```
 Result: Triple blank lines.
 
-### The Solution: Output-Time Normalization
+### The Solution: Output-Time Policy
 
 **Do NOT delete empty paragraphs during typing** - causes cursor jumps.
 
-**DO filter them at serialization:**
+**DO apply the configured blank-line policy at serialization:**
 
 ```typescript
-// src/webview/extensions/markdownParagraph.ts
-export const MarkdownParagraph = Paragraph.extend({
-  renderMarkdown: (node, helpers, _ctx) => {
-    const content = helpers.renderChildren(node.content || []);
-    
-    // Skip empty paragraphs
-    if (!hasMeaningfulContent(node) && content.trim() === '') {
-      return null;  // ← Skip this node in output
-    }
-    
-    return content;
-  },
-});
+// src/webview/utils/markdownSerialization.ts
+getEditorMarkdownForSync(editor, blankLineMode);
 ```
+
+Default behavior preserves explicit middle blank paragraphs as extra Markdown
+blank lines. The `strip` mode is available for users who want automatic
+blank-line cleanup.
 
 **Helper function:**
 ```typescript
@@ -398,4 +391,3 @@ Use `src/__tests__/fixtures/epicReaderFriendly.ts` as canonical fixture for imag
 | `src/__tests__/webview/imageEnterSpacing.test.ts` | Comprehensive test suite |
 
 ---
-

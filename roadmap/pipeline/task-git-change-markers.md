@@ -154,6 +154,13 @@
 - **Notes:** Dirty-diff temp files normalize line endings before comparison, and Git watcher coverage now includes branch refs plus `packed-refs` in addition to `index` and `HEAD`.
 - **Validation:** `npm test -- gitChangeMarkers.test.ts undoSync.test.ts --runInBand`, `npm run lint`, `git diff --check`.
 
+### 2026-07-06 - Blank-line alignment follow-up
+
+- **What:** Made explicit blank-line preservation the default and tightened blank-line layout equivalence so Git marker projection follows unsaved editor spacing.
+- **Files:** `package.json`, `src/editor/MarkdownEditorProvider.ts`, `src/editor/markdownAstEquivalence.ts`, `src/webview/editor.ts`, `src/__tests__/editor/markdownAstEquivalence.test.ts`, `src/__tests__/editor/undoSync.test.ts`, `src/__tests__/features/packageConfiguration.test.ts`, `src/__tests__/webview/undo-sync.test.ts`, `src/__tests__/webview/blankLinePreservation.test.ts`
+- **Notes:** The editor still supports `markdownForHumans.blankLines.mode = strip`, but the default now preserves intentionally inserted middle blank paragraphs as Markdown blank lines. The layout comparator ignores final single trailing newlines and soft-wrap line breaks while still detecting changed two-or-more-newline blank gaps.
+- **Validation:** `npm test -- src/__tests__/editor/markdownAstEquivalence.test.ts src/__tests__/editor/undoSync.test.ts src/__tests__/features/packageConfiguration.test.ts src/__tests__/webview/undo-sync.test.ts src/__tests__/webview/blankLinePreservation.test.ts --runInBand`.
+
 ---
 
 ## 8. Decisions & Tradeoffs
