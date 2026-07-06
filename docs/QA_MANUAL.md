@@ -330,6 +330,7 @@ Open settings via:
 - `markdownForHumans.layout.leftMargin` (pixels)
 - `markdownForHumans.layout.rightMargin` (pixels)
 - `markdownForHumans.layout.maxContentWidth` (pixels, `0` for unbounded)
+- `markdownForHumans.git.diffPeekScrollBehavior` (`smooth` or `snap`)
 
 ---
 

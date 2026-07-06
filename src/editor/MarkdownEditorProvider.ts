@@ -192,6 +192,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return value === 'compact' ? 'compact' : 'padded';
   }
 
+  private getGitDiffPeekScrollBehavior(): 'smooth' | 'snap' {
+    const config = vscode.workspace.getConfiguration();
+    const value = config.get<string>('markdownForHumans.git.diffPeekScrollBehavior', 'smooth');
+    return value === 'snap' ? 'snap' : 'smooth';
+  }
+
   private isMathEnabled(): boolean {
     const config = vscode.workspace.getConfiguration();
     return config.get<boolean>('markdownForHumans.enableMath', true) !== false;
@@ -561,6 +567,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.layout.leftMargin') ||
         e.affectsConfiguration('markdownForHumans.layout.rightMargin') ||
         e.affectsConfiguration('markdownForHumans.layout.maxContentWidth') ||
+        e.affectsConfiguration('markdownForHumans.git.diffPeekScrollBehavior') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
         e.affectsConfiguration('markdownForHumans.table.pipeStyle') ||
         e.affectsConfiguration('markdownForHumans.enableMath') ||
@@ -592,6 +599,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         const leftMargin = config.get<number>('markdownForHumans.layout.leftMargin', 30);
         const rightMargin = config.get<number>('markdownForHumans.layout.rightMargin', 30);
         const maxContentWidth = config.get<number>('markdownForHumans.layout.maxContentWidth', 0);
+        const gitDiffPeekScrollBehavior = this.getGitDiffPeekScrollBehavior();
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
         const tablePipeStyle = this.getTablePipeStyle();
@@ -624,6 +632,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           leftMargin: leftMargin,
           rightMargin: rightMargin,
           maxContentWidth: maxContentWidth,
+          gitDiffPeekScrollBehavior,
           zoom: zoom,
           blankLineMode,
           tablePipeStyle,
@@ -746,6 +755,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const leftMargin = config.get<number>('markdownForHumans.layout.leftMargin', 30);
     const rightMargin = config.get<number>('markdownForHumans.layout.rightMargin', 30);
     const maxContentWidth = config.get<number>('markdownForHumans.layout.maxContentWidth', 0);
+    const gitDiffPeekScrollBehavior = this.getGitDiffPeekScrollBehavior();
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
     const blankLineMode = this.getBlankLineMode();
     const tablePipeStyle = this.getTablePipeStyle();
@@ -765,6 +775,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       leftMargin: leftMargin,
       rightMargin: rightMargin,
       maxContentWidth: maxContentWidth,
+      gitDiffPeekScrollBehavior,
       zoom: zoom,
       blankLineMode,
       tablePipeStyle,
@@ -1051,6 +1062,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         const leftMargin = config.get<number>('markdownForHumans.layout.leftMargin', 30);
         const rightMargin = config.get<number>('markdownForHumans.layout.rightMargin', 30);
         const maxContentWidth = config.get<number>('markdownForHumans.layout.maxContentWidth', 0);
+        const gitDiffPeekScrollBehavior = this.getGitDiffPeekScrollBehavior();
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
         const tablePipeStyle = this.getTablePipeStyle();
@@ -1068,6 +1080,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           leftMargin: leftMargin,
           rightMargin: rightMargin,
           maxContentWidth: maxContentWidth,
+          gitDiffPeekScrollBehavior,
           zoom: zoom,
           blankLineMode,
           tablePipeStyle,

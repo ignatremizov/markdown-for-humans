@@ -270,6 +270,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       rightMargin: 30,
       maxContentWidth: 0,
       zoom: 100,
+      gitDiffPeekScrollBehavior: 'smooth',
       editorTheme: 'vscode',
       sourceContentForMarkers: 'fresh content',
       sourceLineCount: 1,
@@ -322,6 +323,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       rightMargin: 30,
       maxContentWidth: 0,
       zoom: 100,
+      gitDiffPeekScrollBehavior: 'smooth',
       editorTheme: 'vscode',
       sourceContentForMarkers: 'fresh content',
       sourceLineCount: 1,
@@ -401,6 +403,41 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
         leftMargin: 64,
         rightMargin: 96,
         maxContentWidth: 900,
+      })
+    );
+
+    getConfigurationSpy.mockRestore();
+  });
+
+  it('should pass Git diff peek scroll behavior config to the webview', () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    const document = createDocument('fresh content');
+    const webview = { postMessage: jest.fn() };
+
+    (provider as unknown as { lastWebviewContent: Map<string, string> }).lastWebviewContent.set(
+      document.uri.toString(),
+      'old content'
+    );
+
+    const getConfigurationSpy = jest.spyOn(vscode.workspace, 'getConfiguration');
+    getConfigurationSpy.mockReturnValue({
+      get: (key: string, defaultValue?: unknown) => {
+        if (key === 'markdownForHumans.git.diffPeekScrollBehavior') {
+          return 'snap';
+        }
+        return defaultValue;
+      },
+    } as unknown as vscode.WorkspaceConfiguration);
+
+    (
+      provider as unknown as {
+        updateWebview: (doc: vscode.TextDocument, wv: { postMessage: jest.Mock }) => void;
+      }
+    ).updateWebview(document as unknown as vscode.TextDocument, webview);
+
+    expect((webview.postMessage as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        gitDiffPeekScrollBehavior: 'snap',
       })
     );
 

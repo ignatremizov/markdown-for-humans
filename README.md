@@ -209,6 +209,10 @@ Export trust settings are application-scoped so a workspace cannot change raw HT
   - Maximum width of the editor content column in pixels.
   - `0` keeps the current unbounded width; positive values center the content with dynamic side margins.
 
+- **`markdownForHumans.git.diffPeekScrollBehavior`** (default: `"smooth"`)
+  - Controls whether Git diff peek navigation scrolls smoothly or jumps immediately.
+  - `smooth` animates when opening or moving between diff peeks; `snap` jumps directly to the next peek.
+
 - **`markdownForHumans.table.pipeStyle`** (default: `"padded"`)
   - Controls GFM table separator row spacing on save.
   - `padded` writes separator rows like `| :---: | --- |`; `compact` writes them like `|:-----:|-----|`.

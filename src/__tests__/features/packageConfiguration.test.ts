@@ -64,6 +64,23 @@ describe('package configuration contributions', () => {
     expect(maxContentWidth.scope).toBe('application');
   });
 
+  it('exposes Git diff peek scroll behavior as an application setting', () => {
+    const setting = properties['markdownForHumans.git.diffPeekScrollBehavior'];
+
+    expect(setting).toMatchObject({
+      type: 'string',
+      enum: ['smooth', 'snap'],
+      enumDescriptions: [
+        'Animate the editor viewport when opening or navigating between Git diff peeks.',
+        'Jump immediately when opening or navigating between Git diff peeks.',
+      ],
+      default: 'smooth',
+      description:
+        'Controls whether Git diff peek navigation scrolls smoothly or snaps immediately.',
+    });
+    expect(setting.scope).toBe('application');
+  });
+
   it('exposes PDF raw HTML/CSS export policy as a setting', () => {
     const setting = properties['markdownForHumans.export.pdfRawHtmlMode'];
 
