@@ -21,10 +21,9 @@ import { installBlankLineLexerNormalizer } from '../../webview/utils/markedLexer
 function createRealEditor(initialMarkdown: string): Editor {
   const element = document.createElement('div');
   document.body.appendChild(element);
-  // We must install the lexer normaliser BEFORE any markdown is parsed,
-  // otherwise the first parse uses the un-normalised lexer and constructs
-  // like `[]()` get dropped on the way into the editor. Production wires
-  // this up the same way (see editor.ts) before setting initial content.
+  // Install the lexer normaliser before this helper parses markdown; production
+  // achieves the same ordering by passing a pre-patched marked instance into
+  // the Editor constructor.
   const editor = new Editor({
     element,
     extensions: [

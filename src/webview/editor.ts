@@ -12,6 +12,7 @@ import 'katex/dist/katex.min.css';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
+import { Marked, marked as defaultMarked } from 'marked';
 import { TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { ListKit } from '@tiptap/extension-list';
 import Link from '@tiptap/extension-link';
@@ -129,6 +130,13 @@ lowlight.registerLanguage('sql', sql);
 lowlight.registerLanguage('java', java);
 lowlight.registerLanguage('go', go);
 lowlight.registerLanguage('rust', rust);
+
+function createPatchedMarkedInstance(): typeof defaultMarked {
+  const marked = new Marked();
+  installBlankLineLexerNormalizer(marked);
+  installMathMarkedExtensions(marked);
+  return marked as unknown as typeof defaultMarked;
+}
 
 // VS Code API type definitions
 type VsCodeApi = {
@@ -715,6 +723,7 @@ function initializeEditor(initialContent: string) {
 
     console.log('[MD4H] Initializing editor...');
     setMathMarkedTokenizerEnabled(true);
+    const marked = createPatchedMarkedInstance();
     const mathExtensions = [MathBlock.configure({ render: mathRenderingEnabled })];
     if (mathRenderingEnabled) {
       mathExtensions.push(MathInline);
@@ -722,6 +731,8 @@ function initializeEditor(initialContent: string) {
 
     const editorInstance = new Editor({
       element: editorElement,
+      content: initialContent,
+      contentType: 'markdown',
       extensions: [
         // Mermaid must be before CodeBlockLowlight to intercept mermaid code blocks
         Mermaid,
@@ -763,6 +774,7 @@ function initializeEditor(initialContent: string) {
         BlankLinePreservation, // Converts extra blank lines (space tokens) to empty paragraphs on parse
         RawHtmlBlock,
         Markdown.configure({
+          marked,
           markedOptions: {
             gfm: true, // GitHub Flavored Markdown for tables, task lists
             breaks: true, // Preserve single newlines as <br>
@@ -811,7 +823,6 @@ function initializeEditor(initialContent: string) {
         DraggableBlocks,
         DocumentAuditExtension,
       ],
-      // Don't pass content here - we'll set it after init with contentType: 'markdown'
       editorProps: {
         attributes: {
           class: 'markdown-editor',
@@ -879,10 +890,9 @@ function initializeEditor(initialContent: string) {
 
     editor = editorInstance;
 
-    // Patch the marked lexer used by @tiptap/markdown so blank lines that
-    // marked greedily absorbs into heading/table/code/hr tokens get split
-    // back out as "space" tokens. Without this, BlankLinePreservation only
-    // works for paragraph-followed-by-blank-lines cases.
+    // The constructor receives a pre-patched marked instance so initial
+    // markdown parses before ProseMirror history starts. Keep this defensive
+    // patch for editor recreations/tests that expose the manager directly.
     try {
       const markdownStorage = editorInstance as unknown as {
         markdown?: unknown;
@@ -895,20 +905,6 @@ function initializeEditor(initialContent: string) {
       }
     } catch (error) {
       console.warn('[MD4H] Failed to install blank-line lexer normalizer:', error);
-    }
-
-    // Set initial content as markdown (Tiptap v3 requires explicit contentType)
-    if (initialContent) {
-      // Prevent onUpdate from firing during initialization - this was causing
-      // documents with frontmatter to be marked dirty even without user edits
-      isUpdating = true;
-      try {
-        navigationHistory.suppressDuring(() => {
-          editorInstance.commands.setContent(initialContent, { contentType: 'markdown' });
-        });
-      } finally {
-        isUpdating = false;
-      }
     }
     navigationHistory.seed(editorInstance.state.selection.from);
 

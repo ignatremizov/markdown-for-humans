@@ -59,13 +59,20 @@ jest.mock('./../../webview/extensions/blankLinePreservation', () => ({
 }));
 jest.mock('./../../webview/extensions/githubAlerts', () => ({ GitHubAlerts: {} }));
 jest.mock('./../../webview/extensions/math', () => ({
-  MathBlock: {},
+  MathBlock: { configure: () => ({}) },
   MathInline: {},
   installMathMarkedExtensions: jest.fn(),
+  setMathMarkedTokenizerEnabled: jest.fn(),
 }));
 jest.mock('./../../webview/BubbleMenuView', () => ({
-  createFormattingToolbar: () => ({}),
-  createTableMenu: () => ({}),
+  createFormattingToolbar: () => ({
+    contains: jest.fn(() => false),
+    remove: jest.fn(),
+  }),
+  createTableMenu: () => ({
+    style: {},
+    remove: jest.fn(),
+  }),
   updateToolbarStates: jest.fn(),
 }));
 jest.mock('./../../webview/features/imageDragDrop', () => ({
@@ -114,16 +121,42 @@ type TestingModule = {
 describe('webview undo/redo guards', () => {
   let testing: TestingModule;
 
-  const setupModule = async () => {
+  const setupModule = async (
+    options: { readyState?: 'loading' | 'complete'; editorMock?: unknown } = {}
+  ) => {
     jest.resetModules();
+    const readyState = options.readyState ?? 'loading';
     const cssProperties = new Map<string, string>();
+    const classNames = new Set<string>();
     const documentElement = {
       style: {
         setProperty: jest.fn((name: string, value: string) => {
           cssProperties.set(name, value);
         }),
         getPropertyValue: jest.fn((name: string) => cssProperties.get(name) ?? ''),
+        removeProperty: jest.fn((name: string) => {
+          cssProperties.delete(name);
+        }),
       },
+      classList: {
+        contains: jest.fn((name: string) => classNames.has(name)),
+        toggle: jest.fn((name: string, force?: boolean) => {
+          if (force) classNames.add(name);
+          else classNames.delete(name);
+        }),
+      },
+    } as unknown as HTMLElement;
+    const body = {
+      classList: documentElement.classList,
+    } as unknown as HTMLElement;
+    const editorElement = {
+      parentElement: {
+        insertBefore: jest.fn(),
+      },
+      innerHTML: '',
+      querySelector: jest.fn(() => null),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
     } as unknown as HTMLElement;
 
     // Minimal globals to satisfy editor.ts on import without creating the editor
@@ -132,13 +165,25 @@ describe('webview undo/redo guards', () => {
         document: {
           readyState: string;
           addEventListener: jest.Mock;
+          removeEventListener: jest.Mock;
           documentElement: HTMLElement;
+          body: HTMLElement;
+          activeElement: HTMLElement | null;
+          querySelector: jest.Mock;
+          querySelectorAll: jest.Mock;
+          getElementById: jest.Mock;
         };
       }
     ).document = {
-      readyState: 'loading',
+      readyState,
       addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
       documentElement,
+      body,
+      activeElement: null,
+      querySelector: jest.fn((selector: string) => (selector === '#editor' ? editorElement : null)),
+      querySelectorAll: jest.fn(() => []),
+      getElementById: jest.fn((id: string) => (id === 'editor' ? editorElement : null)),
     };
     (
       global as unknown as {
@@ -146,12 +191,14 @@ describe('webview undo/redo guards', () => {
           setTimeout: typeof setTimeout;
           clearTimeout: typeof clearTimeout;
           addEventListener: jest.Mock;
+          dispatchEvent: jest.Mock;
         };
       }
     ).window = {
       setTimeout,
       clearTimeout,
       addEventListener: jest.fn(),
+      dispatchEvent: jest.fn(),
     };
     (
       global as unknown as {
@@ -169,6 +216,12 @@ describe('webview undo/redo guards', () => {
     (global as unknown as { performance: { now: () => number } }).performance = {
       now: () => 0,
     };
+
+    const tiptapCore = jest.requireMock('@tiptap/core') as { Editor: jest.Mock };
+    tiptapCore.Editor.mockReset();
+    if (options.editorMock) {
+      tiptapCore.Editor.mockImplementation(() => options.editorMock);
+    }
 
     try {
       const mod = await import('../../webview/editor');
@@ -282,6 +335,46 @@ describe('webview undo/redo guards', () => {
 
   it('preserves explicit blank lines before host settings arrive', () => {
     expect(testing.getBlankLineModeForTests()).toBe('preserve');
+  });
+
+  it('seeds the initial update content through the Editor constructor', async () => {
+    const initialMarkdown = '# Heading\n\nFirst paragraph.';
+    const setContent = jest.fn();
+    const editorDom = {
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      querySelectorAll: jest.fn(() => []),
+    };
+    const editorMock = {
+      commands: {
+        setContent,
+        setTextSelection: jest.fn(),
+        insertContent: jest.fn(),
+      },
+      state: {
+        selection: { from: 1, to: 1, empty: true },
+        doc: { content: { size: initialMarkdown.length } },
+      },
+      view: { dom: editorDom },
+      on: jest.fn(),
+      isActive: jest.fn(() => false),
+    };
+
+    await setupModule({ readyState: 'complete', editorMock });
+    const messageHandler = (window.addEventListener as jest.Mock).mock.calls.find(
+      ([eventName]) => eventName === 'message'
+    )?.[1] as ((event: MessageEvent) => void) | undefined;
+    expect(messageHandler).toBeDefined();
+
+    messageHandler?.({ data: { type: 'update', content: initialMarkdown } } as MessageEvent);
+
+    const { Editor } = jest.requireMock('@tiptap/core') as { Editor: jest.Mock };
+    expect(Editor).toHaveBeenCalledTimes(1);
+    expect(Editor.mock.calls[0][0]).toMatchObject({
+      content: initialMarkdown,
+      contentType: 'markdown',
+    });
+    expect(setContent).not.toHaveBeenCalled();
   });
 
   it('applies layout width settings as editor CSS variables', () => {
