@@ -25,6 +25,7 @@ import { SpaceFriendlyImagePaths } from './extensions/spaceFriendlyImagePaths';
 import { TabIndentation } from './extensions/tabIndentation';
 import { GitHubAlerts } from './extensions/githubAlerts';
 import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
+import { InlineCodeBacktickShortcut } from './extensions/inlineCodeBacktickShortcut';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
@@ -800,6 +801,7 @@ function initializeEditor(initialContent: string) {
         BulletListMarkdownFix,
         OrderedListMarkdownFix,
         TabIndentation, // Enable Tab/Shift+Tab for list indentation
+        InlineCodeBacktickShortcut,
         ImageEnterSpacing, // Handle Enter key around images and gap cursor
         Link.configure({
           openOnClick: false,
