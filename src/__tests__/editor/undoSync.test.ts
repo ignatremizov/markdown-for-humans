@@ -242,6 +242,9 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       showImageHoverOverlay: true,
       paragraphSpacingBefore: 0,
       paragraphSpacingAfter: 0,
+      leftMargin: 30,
+      rightMargin: 30,
+      maxContentWidth: 0,
       zoom: 100,
       editorTheme: 'vscode',
       sourceContentForMarkers: 'fresh content',
@@ -291,6 +294,9 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       showImageHoverOverlay: false,
       paragraphSpacingBefore: 0,
       paragraphSpacingAfter: 0,
+      leftMargin: 30,
+      rightMargin: 30,
+      maxContentWidth: 0,
       zoom: 100,
       editorTheme: 'vscode',
       sourceContentForMarkers: 'fresh content',
@@ -330,6 +336,49 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(webview.postMessage).toHaveBeenCalledTimes(1);
     const payload = (webview.postMessage as jest.Mock).mock.calls[0][0];
     expect(payload.enableMath).toBe(false);
+
+    getConfigurationSpy.mockRestore();
+  });
+
+  it('should pass layout width config to the webview', () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    const document = createDocument('fresh content');
+    const webview = { postMessage: jest.fn() };
+
+    (provider as unknown as { lastWebviewContent: Map<string, string> }).lastWebviewContent.set(
+      document.uri.toString(),
+      'old content'
+    );
+
+    const getConfigurationSpy = jest.spyOn(vscode.workspace, 'getConfiguration');
+    getConfigurationSpy.mockReturnValue({
+      get: (key: string, defaultValue?: unknown) => {
+        if (key === 'markdownForHumans.layout.leftMargin') {
+          return 64;
+        }
+        if (key === 'markdownForHumans.layout.rightMargin') {
+          return 96;
+        }
+        if (key === 'markdownForHumans.layout.maxContentWidth') {
+          return 900;
+        }
+        return defaultValue;
+      },
+    } as unknown as vscode.WorkspaceConfiguration);
+
+    (
+      provider as unknown as {
+        updateWebview: (doc: vscode.TextDocument, wv: { postMessage: jest.Mock }) => void;
+      }
+    ).updateWebview(document as unknown as vscode.TextDocument, webview);
+
+    expect((webview.postMessage as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        leftMargin: 64,
+        rightMargin: 96,
+        maxContentWidth: 900,
+      })
+    );
 
     getConfigurationSpy.mockRestore();
   });

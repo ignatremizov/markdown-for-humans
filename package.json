@@ -307,6 +307,30 @@
           "description": "Space after paragraphs in points (margin-bottom). Default: 0pt",
           "scope": "application"
         },
+        "markdownForHumans.layout.leftMargin": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 240,
+          "description": "Left side margin for the editor in pixels. Default: 30px",
+          "scope": "application"
+        },
+        "markdownForHumans.layout.rightMargin": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 240,
+          "description": "Right side margin for the editor in pixels. Default: 30px",
+          "scope": "application"
+        },
+        "markdownForHumans.layout.maxContentWidth": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 2400,
+          "description": "Maximum width of the editor content column in pixels. Set to 0 for no maximum. Default: 0",
+          "scope": "application"
+        },
         "markdownForHumans.zoom": {
           "type": "number",
           "default": 100,

@@ -199,6 +199,16 @@ Export trust settings are application-scoped so a workspace cannot change raw HT
   - `Always use a light theme` / `Always use a dark theme` keep the editor light or dark regardless of VS Code. When your active VS Code theme already matches the chosen appearance the editor uses that real theme; otherwise it falls back to a built-in light or dark theme.
   - The light/dark toggle button at the end of the editor toolbar switches between light and dark and applies to all open editors.
 
+- **`markdownForHumans.layout.leftMargin`** (default: `30`)
+  - Left side margin for the editor in pixels.
+
+- **`markdownForHumans.layout.rightMargin`** (default: `30`)
+  - Right side margin for the editor in pixels.
+
+- **`markdownForHumans.layout.maxContentWidth`** (default: `0`)
+  - Maximum width of the editor content column in pixels.
+  - `0` keeps the current unbounded width; positive values center the content with dynamic side margins.
+
 - **`markdownForHumans.table.pipeStyle`** (default: `"padded"`)
   - Controls GFM table separator row spacing on save.
   - `padded` writes separator rows like `| :---: | --- |`; `compact` writes them like `|:-----:|-----|`.

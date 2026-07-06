@@ -327,6 +327,9 @@ Open settings via:
 - `markdownForHumans.chromePath` (PDF export)
 - `markdownForHumans.imageResize.skipWarning`
 - `markdownForHumans.table.pipeStyle` (`padded` or `compact`)
+- `markdownForHumans.layout.leftMargin` (pixels)
+- `markdownForHumans.layout.rightMargin` (pixels)
+- `markdownForHumans.layout.maxContentWidth` (pixels, `0` for unbounded)
 
 ---
 

@@ -2038,9 +2038,11 @@ function applyThemeOverride(setting: EditorThemeSetting, vscodeIsDark: boolean) 
   ensureThemeClassObserver();
 }
 
+const UNBOUNDED_CONTENT_MAX_WIDTH_PX = 999999;
+
 /**
- * Applies paragraph spacing, zoom, and theme-override settings from an incoming
- * message. Called from both the `update` and `settingsUpdate` handlers.
+ * Applies layout, paragraph spacing, zoom, and theme-override settings from an
+ * incoming message. Called from both the `update` and `settingsUpdate` handlers.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyEditorSettings(message: Record<string, any>) {
@@ -2055,6 +2057,19 @@ function applyEditorSettings(message: Record<string, any>) {
       '--md-paragraph-spacing-after',
       `${message.paragraphSpacingAfter}pt`
     );
+  }
+  if (typeof message.leftMargin === 'number') {
+    document.documentElement.style.setProperty('--md-left-margin', `${message.leftMargin}px`);
+  }
+  if (typeof message.rightMargin === 'number') {
+    document.documentElement.style.setProperty('--md-right-margin', `${message.rightMargin}px`);
+  }
+  if (typeof message.maxContentWidth === 'number') {
+    const maxContentWidth =
+      Number.isFinite(message.maxContentWidth) && message.maxContentWidth > 0
+        ? message.maxContentWidth
+        : UNBOUNDED_CONTENT_MAX_WIDTH_PX;
+    document.documentElement.style.setProperty('--md-content-max-width', `${maxContentWidth}px`);
   }
   if (typeof message.zoom === 'number') {
     applyZoomLevel(message.zoom);
@@ -2186,6 +2201,9 @@ export const __testing = {
   insertRawCodeTextForTests(text: string) {
     if (!editor) return;
     insertRawCodeText(editor, text);
+  },
+  applyEditorSettingsForTests(message: Record<string, unknown>) {
+    applyEditorSettings(message);
   },
   isPlainFindShortcutForTests(event: {
     key: string;

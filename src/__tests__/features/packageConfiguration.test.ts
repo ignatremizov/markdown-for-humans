@@ -32,6 +32,38 @@ describe('package configuration contributions', () => {
     expect(setting.scope).toBeUndefined();
   });
 
+  it('exposes editor side margins as application settings', () => {
+    const leftMargin = properties['markdownForHumans.layout.leftMargin'];
+    const rightMargin = properties['markdownForHumans.layout.rightMargin'];
+    const maxContentWidth = properties['markdownForHumans.layout.maxContentWidth'];
+
+    expect(leftMargin).toMatchObject({
+      type: 'number',
+      default: 30,
+      minimum: 0,
+      maximum: 240,
+      description: 'Left side margin for the editor in pixels. Default: 30px',
+    });
+    expect(leftMargin.scope).toBe('application');
+    expect(rightMargin).toMatchObject({
+      type: 'number',
+      default: 30,
+      minimum: 0,
+      maximum: 240,
+      description: 'Right side margin for the editor in pixels. Default: 30px',
+    });
+    expect(rightMargin.scope).toBe('application');
+    expect(maxContentWidth).toMatchObject({
+      type: 'number',
+      default: 0,
+      minimum: 0,
+      maximum: 2400,
+      description:
+        'Maximum width of the editor content column in pixels. Set to 0 for no maximum. Default: 0',
+    });
+    expect(maxContentWidth.scope).toBe('application');
+  });
+
   it('exposes PDF raw HTML/CSS export policy as a setting', () => {
     const setting = properties['markdownForHumans.export.pdfRawHtmlMode'];
 

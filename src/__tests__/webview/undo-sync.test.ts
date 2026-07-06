@@ -100,6 +100,7 @@ type TestingModule = {
   updateEditorContentForTests: (content: string) => void;
   isCodeContextForPasteForTests: (event: ClipboardEvent) => boolean;
   insertRawCodeTextForTests: (text: string) => void;
+  applyEditorSettingsForTests: (message: Record<string, unknown>) => void;
   isPlainFindShortcutForTests: (event: {
     key: string;
     ctrlKey?: boolean;
@@ -114,13 +115,29 @@ describe('webview undo/redo guards', () => {
 
   const setupModule = async () => {
     jest.resetModules();
+    const cssProperties = new Map<string, string>();
+    const documentElement = {
+      style: {
+        setProperty: jest.fn((name: string, value: string) => {
+          cssProperties.set(name, value);
+        }),
+        getPropertyValue: jest.fn((name: string) => cssProperties.get(name) ?? ''),
+      },
+    } as unknown as HTMLElement;
 
     // Minimal globals to satisfy editor.ts on import without creating the editor
     (
-      global as unknown as { document: { readyState: string; addEventListener: jest.Mock } }
+      global as unknown as {
+        document: {
+          readyState: string;
+          addEventListener: jest.Mock;
+          documentElement: HTMLElement;
+        };
+      }
     ).document = {
       readyState: 'loading',
       addEventListener: jest.fn(),
+      documentElement,
     };
     (
       global as unknown as {
@@ -259,6 +276,22 @@ describe('webview undo/redo guards', () => {
     );
     expect(testing.isPlainFindShortcutForTests({ key: 'f', ctrlKey: true, altKey: true })).toBe(
       false
+    );
+  });
+
+  it('applies layout width settings as editor CSS variables', () => {
+    testing.applyEditorSettingsForTests({ leftMargin: 64, rightMargin: 96, maxContentWidth: 900 });
+
+    expect(document.documentElement.style.getPropertyValue('--md-left-margin')).toBe('64px');
+    expect(document.documentElement.style.getPropertyValue('--md-right-margin')).toBe('96px');
+    expect(document.documentElement.style.getPropertyValue('--md-content-max-width')).toBe('900px');
+  });
+
+  it('uses an unbounded content width when max content width is disabled', () => {
+    testing.applyEditorSettingsForTests({ maxContentWidth: 0 });
+
+    expect(document.documentElement.style.getPropertyValue('--md-content-max-width')).toBe(
+      '999999px'
     );
   });
 });

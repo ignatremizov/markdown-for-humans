@@ -162,6 +162,25 @@
   
     /* Typography and layout — zoom override takes priority if set by JS */
     --md-base-size: var(--md-base-size-override, var(--vscode-editor-font-size, 14px));
+    --md-marker-left-reserve: 24px;
+    --md-marker-right-reserve: 16px;
+    --md-content-max-width-default: 999999px;
+    --md-left-layout-margin: calc(
+      max(var(--md-left-margin, 30px), var(--md-marker-left-reserve)) -
+        var(--md-marker-left-reserve)
+    );
+    --md-right-layout-margin: calc(
+      max(var(--md-right-margin, 30px), var(--md-marker-right-reserve)) -
+        var(--md-marker-right-reserve)
+    );
+    --md-layout-extra-margin: max(
+      0px,
+      calc(
+        100% - var(--md-left-layout-margin) - var(--md-right-layout-margin) -
+          var(--md-marker-left-reserve) - var(--md-marker-right-reserve) -
+          var(--md-content-max-width, var(--md-content-max-width-default))
+      )
+    );
   
     line-height: 1.58;
     letter-spacing: -0.003em;
@@ -175,7 +194,14 @@
     word-wrap: break-word;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-    margin: 10px 30px;
+    box-sizing: border-box;
+    margin:
+      10px
+      calc(var(--md-right-layout-margin) + (var(--md-layout-extra-margin) * 0.5))
+      10px
+      calc(var(--md-left-layout-margin) + (var(--md-layout-extra-margin) * 0.5));
+    padding-left: var(--md-marker-left-reserve);
+    padding-right: var(--md-marker-right-reserve);
   }
   
   .markdown-editor .ProseMirror {

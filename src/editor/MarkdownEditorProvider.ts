@@ -554,6 +554,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.blankLines.mode') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
+        e.affectsConfiguration('markdownForHumans.layout.leftMargin') ||
+        e.affectsConfiguration('markdownForHumans.layout.rightMargin') ||
+        e.affectsConfiguration('markdownForHumans.layout.maxContentWidth') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
         e.affectsConfiguration('markdownForHumans.table.pipeStyle') ||
         e.affectsConfiguration('markdownForHumans.enableMath') ||
@@ -582,6 +585,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           'markdownForHumans.paragraph.spacingAfter',
           0
         );
+        const leftMargin = config.get<number>('markdownForHumans.layout.leftMargin', 30);
+        const rightMargin = config.get<number>('markdownForHumans.layout.rightMargin', 30);
+        const maxContentWidth = config.get<number>('markdownForHumans.layout.maxContentWidth', 0);
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
         const tablePipeStyle = this.getTablePipeStyle();
@@ -611,6 +617,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           showImageHoverOverlay: showImageHoverOverlay,
           paragraphSpacingBefore: paragraphSpacingBefore,
           paragraphSpacingAfter: paragraphSpacingAfter,
+          leftMargin: leftMargin,
+          rightMargin: rightMargin,
+          maxContentWidth: maxContentWidth,
           zoom: zoom,
           blankLineMode,
           tablePipeStyle,
@@ -730,6 +739,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       0
     );
     const paragraphSpacingAfter = config.get<number>('markdownForHumans.paragraph.spacingAfter', 0);
+    const leftMargin = config.get<number>('markdownForHumans.layout.leftMargin', 30);
+    const rightMargin = config.get<number>('markdownForHumans.layout.rightMargin', 30);
+    const maxContentWidth = config.get<number>('markdownForHumans.layout.maxContentWidth', 0);
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
     const blankLineMode = this.getBlankLineMode();
     const tablePipeStyle = this.getTablePipeStyle();
@@ -746,6 +758,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       showImageHoverOverlay: showImageHoverOverlay,
       paragraphSpacingBefore: paragraphSpacingBefore,
       paragraphSpacingAfter: paragraphSpacingAfter,
+      leftMargin: leftMargin,
+      rightMargin: rightMargin,
+      maxContentWidth: maxContentWidth,
       zoom: zoom,
       blankLineMode,
       tablePipeStyle,
@@ -924,6 +939,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           'markdownForHumans.paragraph.spacingAfter',
           0
         );
+        const leftMargin = config.get<number>('markdownForHumans.layout.leftMargin', 30);
+        const rightMargin = config.get<number>('markdownForHumans.layout.rightMargin', 30);
+        const maxContentWidth = config.get<number>('markdownForHumans.layout.maxContentWidth', 0);
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
         const tablePipeStyle = this.getTablePipeStyle();
@@ -938,6 +956,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           showImageHoverOverlay: showImageHoverOverlay,
           paragraphSpacingBefore: paragraphSpacingBefore,
           paragraphSpacingAfter: paragraphSpacingAfter,
+          leftMargin: leftMargin,
+          rightMargin: rightMargin,
+          maxContentWidth: maxContentWidth,
           zoom: zoom,
           blankLineMode,
           tablePipeStyle,
