@@ -181,6 +181,12 @@
           var(--md-content-max-width, var(--md-content-max-width-default))
       )
     );
+    --md-left-effective-margin: calc(
+      var(--md-left-layout-margin) + (var(--md-layout-extra-margin) * 0.5)
+    );
+    --md-right-effective-margin: calc(
+      var(--md-right-layout-margin) + (var(--md-layout-extra-margin) * 0.5)
+    );
   
     line-height: 1.58;
     letter-spacing: -0.003em;
@@ -197,9 +203,9 @@
     box-sizing: border-box;
     margin:
       10px
-      calc(var(--md-right-layout-margin) + (var(--md-layout-extra-margin) * 0.5))
+      var(--md-right-effective-margin)
       10px
-      calc(var(--md-left-layout-margin) + (var(--md-layout-extra-margin) * 0.5));
+      var(--md-left-effective-margin);
     padding-left: var(--md-marker-left-reserve);
     padding-right: var(--md-marker-right-reserve);
   }
@@ -285,8 +291,8 @@
 
   .git-hunk-diff-widget {
     position: absolute;
-    left: var(--md-marker-left-reserve);
-    right: var(--md-marker-right-reserve);
+    left: calc(-1 * var(--md-left-effective-margin));
+    right: calc(-1 * var(--md-right-effective-margin));
     max-height: min(340px, 44vh);
     overflow: hidden;
     z-index: 30;
@@ -349,6 +355,7 @@
   .git-hunk-diff-body {
     max-height: calc(min(340px, 44vh) - 35px);
     overflow: auto;
+    overscroll-behavior: contain;
   }
 
   .git-hunk-diff-line {
@@ -365,6 +372,15 @@
 
   .git-hunk-diff-line-new {
     background: var(--vscode-diffEditor-insertedLineBackground, rgba(0, 255, 0, 0.14));
+  }
+
+  .git-hunk-diff-line-context {
+    background: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+  }
+
+  .git-hunk-diff-line-selected {
+    box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
   }
 
   .git-hunk-diff-line-old .git-hunk-diff-token-changed {

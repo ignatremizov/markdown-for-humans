@@ -65,6 +65,7 @@ import {
   renderGitChangeMarkers,
   renderGitHunkDiffWidget,
   type GitChangeRange,
+  type GitHunkScrollBehavior,
 } from './features/gitChangeMarkers';
 
 // Helper function for slug generation (same as in linkDialog)
@@ -287,6 +288,7 @@ let aiContextSessionSkipSave = false;
 let aiContextSkipSaveWarningSetting = false;
 let blankLineMode: BlankLineMode = 'strip';
 let mathRenderingEnabled = true;
+let gitDiffPeekScrollBehavior: GitHunkScrollBehavior = 'smooth';
 
 // Pending document-dirty queries, keyed by requestId. The host replies with
 // `documentDirtyResponse`; we look up the resolver here.
@@ -535,6 +537,14 @@ function applyMathSetting(message: WebviewMessage, rebuildExistingEditor: boolea
   }
 }
 
+function applyGitDiffPeekScrollBehavior(message: WebviewMessage): void {
+  if (message.gitDiffPeekScrollBehavior === 'snap') {
+    gitDiffPeekScrollBehavior = 'snap';
+  } else if (message.gitDiffPeekScrollBehavior === 'smooth') {
+    gitDiffPeekScrollBehavior = 'smooth';
+  }
+}
+
 function reinitializeEditorForMathSetting(): void {
   const existingEditor = editor;
   if (!existingEditor) return;
@@ -613,6 +623,8 @@ function renderGitHunkDiffAtIndex(index: number, options: { scrollIntoView?: boo
       closeGitHunkDiff();
     },
     scrollIntoView: options.scrollIntoView,
+    scrollBehavior: gitDiffPeekScrollBehavior,
+    sourceMarkdown: currentSourceMarkdown,
   });
 }
 
@@ -626,7 +638,7 @@ function showGitHunkDiff(index: number): void {
     return;
   }
 
-  renderGitHunkDiffAtIndex(index);
+  renderGitHunkDiffAtIndex(index, { scrollIntoView: true });
 }
 
 function renderGitChangesFromMessage(message: WebviewMessage): void {
@@ -1264,6 +1276,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         if (message.tablePipeStyle === 'compact' || message.tablePipeStyle === 'padded') {
           tableRenderOptions.pipeStyle = message.tablePipeStyle;
         }
+        applyGitDiffPeekScrollBehavior(message);
         applyMathSetting(message, Boolean(editor));
         // Store imagePath setting if present
         if (typeof message.imagePath === 'string') {
@@ -1304,6 +1317,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         if (message.tablePipeStyle === 'compact' || message.tablePipeStyle === 'padded') {
           tableRenderOptions.pipeStyle = message.tablePipeStyle;
         }
+        applyGitDiffPeekScrollBehavior(message);
         applyMathSetting(message, true);
         // Update imagePath setting
         if (typeof message.imagePath === 'string') {
@@ -2273,6 +2287,9 @@ export const __testing = {
   },
   applyEditorSettingsForTests(message: Record<string, unknown>) {
     applyEditorSettings(message);
+  },
+  renderGitChangesFromMessageForTests(message: Record<string, unknown>) {
+    renderGitChangesFromMessage(message as WebviewMessage);
   },
   isPlainFindShortcutForTests(event: {
     key: string;

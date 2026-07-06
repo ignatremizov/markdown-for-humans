@@ -6,6 +6,7 @@
  */
 
 export type GitChangeType = 'added' | 'modified' | 'deleted';
+export type GitHunkScrollBehavior = 'smooth' | 'snap';
 
 export interface GitChangeRange {
   type: GitChangeType;
@@ -48,6 +49,9 @@ const HUNK_DIFF_WIDGET_CLASS = 'git-hunk-diff-widget';
 const HUNK_SCROLL_MIN_DURATION_MS = 110;
 const HUNK_SCROLL_MAX_DURATION_MS = 360;
 const HUNK_SCROLL_CENTER_PADDING_PX = 24;
+const HUNK_DIFF_CONTEXT_LINES = 3;
+const HUNK_DIFF_MAX_REVIEW_LINES = 240;
+const HUNK_DIFF_SELECTED_ROW_PADDING_PX = 24;
 
 function isGitChangeType(value: unknown): value is GitChangeType {
   return value === 'added' || value === 'modified' || value === 'deleted';
@@ -517,6 +521,15 @@ interface InlineDiffPart {
   changed: boolean;
 }
 
+interface DiffPeekRow {
+  type: 'context' | 'old' | 'new';
+  lineNumber: number | null;
+  text: string;
+  parts?: InlineDiffPart[];
+  changeIndex?: number;
+  selected?: boolean;
+}
+
 const MAX_INLINE_DIFF_TOKENS = 400;
 
 function tokenizeInlineDiffText(text: string): string[] {
@@ -685,15 +698,170 @@ function computeInlineDiffs(oldLines: string[], newLines: string[]) {
   return { oldParts, newParts };
 }
 
+function currentLineSpan(change: GitChangeRange): number {
+  if (typeof change.newLineCount === 'number' && Number.isFinite(change.newLineCount)) {
+    return Math.max(0, Math.floor(change.newLineCount));
+  }
+  if (change.newLines) return change.newLines.length;
+  if (change.type === 'deleted') return 0;
+  return Math.max(0, change.endLine - change.startLine + 1);
+}
+
+function hunkWindowRange(change: GitChangeRange): { startLine: number; endLine: number } {
+  if (change.type === 'deleted' || currentLineSpan(change) === 0) {
+    return { startLine: change.startLine, endLine: change.startLine };
+  }
+  return { startLine: change.startLine, endLine: change.endLine };
+}
+
+function contextualWindow(
+  changes: GitChangeRange[],
+  selectedIndex: number,
+  lineCount: number
+): { startLine: number; endLine: number; includedChanges: Array<[number, GitChangeRange]> } {
+  const selectedRange = hunkWindowRange(changes[selectedIndex]);
+  let startLine = Math.max(1, selectedRange.startLine - HUNK_DIFF_CONTEXT_LINES);
+  let endLine = Math.min(lineCount, selectedRange.endLine + HUNK_DIFF_CONTEXT_LINES);
+  let expanded = true;
+
+  while (expanded) {
+    expanded = false;
+    for (const change of changes) {
+      const range = hunkWindowRange(change);
+      if (
+        range.startLine <= endLine + HUNK_DIFF_CONTEXT_LINES &&
+        range.endLine >= startLine - HUNK_DIFF_CONTEXT_LINES
+      ) {
+        const nextStart = Math.max(1, range.startLine - HUNK_DIFF_CONTEXT_LINES);
+        const nextEnd = Math.min(lineCount, range.endLine + HUNK_DIFF_CONTEXT_LINES);
+        if (nextStart < startLine || nextEnd > endLine) {
+          startLine = Math.min(startLine, nextStart);
+          endLine = Math.max(endLine, nextEnd);
+          expanded = true;
+        }
+      }
+    }
+  }
+
+  if (endLine - startLine + 1 > HUNK_DIFF_MAX_REVIEW_LINES) {
+    const selectedCenter = Math.floor((selectedRange.startLine + selectedRange.endLine) / 2);
+    const halfWindow = Math.floor(HUNK_DIFF_MAX_REVIEW_LINES / 2);
+    startLine = Math.max(1, selectedCenter - halfWindow);
+    endLine = Math.min(lineCount, startLine + HUNK_DIFF_MAX_REVIEW_LINES - 1);
+    startLine = Math.max(1, endLine - HUNK_DIFF_MAX_REVIEW_LINES + 1);
+  }
+
+  const includedChanges = changes
+    .map((change, index): [number, GitChangeRange] => [index, change])
+    .filter(([, change]) => {
+      const range = hunkWindowRange(change);
+      return range.startLine <= endLine && range.endLine >= startLine;
+    })
+    .sort(
+      ([, left], [, right]) => left.startLine - right.startLine || left.endLine - right.endLine
+    );
+
+  return { startLine, endLine, includedChanges };
+}
+
+function appendContextRows(
+  rows: DiffPeekRow[],
+  sourceLines: string[],
+  startLine: number,
+  endLine: number
+): void {
+  for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+    rows.push({
+      type: 'context',
+      lineNumber,
+      text: sourceLines[lineNumber - 1] ?? '',
+    });
+  }
+}
+
+function appendChangeRows(
+  rows: DiffPeekRow[],
+  change: GitChangeRange,
+  changeIndex: number,
+  selectedIndex: number
+): number {
+  const oldLines = change.oldLines ?? [];
+  const newLines = change.newLines ?? [];
+  const inlineDiffs = computeInlineDiffs(oldLines, newLines);
+  const selected = changeIndex === selectedIndex;
+
+  for (let index = 0; index < oldLines.length; index += 1) {
+    rows.push({
+      type: 'old',
+      lineNumber: typeof change.oldStart === 'number' ? change.oldStart + index : null,
+      text: oldLines[index],
+      parts: inlineDiffs.oldParts[index],
+      changeIndex,
+      selected,
+    });
+  }
+
+  for (let index = 0; index < newLines.length; index += 1) {
+    rows.push({
+      type: 'new',
+      lineNumber: typeof change.newStart === 'number' ? change.newStart + index : null,
+      text: newLines[index],
+      parts: inlineDiffs.newParts[index],
+      changeIndex,
+      selected,
+    });
+  }
+
+  const newLineSpan = currentLineSpan(change);
+  return change.type === 'deleted'
+    ? change.startLine
+    : Math.max(change.startLine + newLineSpan, change.endLine + 1);
+}
+
+function buildContextualDiffRows(
+  changes: GitChangeRange[],
+  selectedIndex: number,
+  sourceMarkdown: string
+): DiffPeekRow[] {
+  const sourceLines = markdownLines(sourceMarkdown);
+  if (sourceLines.length === 0) return [];
+
+  const { startLine, endLine, includedChanges } = contextualWindow(
+    changes,
+    selectedIndex,
+    sourceLines.length
+  );
+  const rows: DiffPeekRow[] = [];
+  let cursorLine = startLine;
+
+  for (const [changeIndex, change] of includedChanges) {
+    if (change.startLine < cursorLine && change.type !== 'deleted') continue;
+
+    appendContextRows(rows, sourceLines, cursorLine, Math.min(endLine, change.startLine - 1));
+    cursorLine = appendChangeRows(rows, change, changeIndex, selectedIndex);
+  }
+
+  appendContextRows(rows, sourceLines, cursorLine, endLine);
+  return rows;
+}
+
 function appendDiffLine(
   container: HTMLElement,
-  type: 'old' | 'new',
+  type: 'context' | 'old' | 'new',
   lineNumber: number | null,
   text: string,
-  parts?: InlineDiffPart[]
+  parts?: InlineDiffPart[],
+  metadata: Pick<DiffPeekRow, 'changeIndex' | 'selected'> = {}
 ): void {
   const row = document.createElement('div');
-  row.className = `git-hunk-diff-line git-hunk-diff-line-${type}`;
+  row.className = [
+    'git-hunk-diff-line',
+    `git-hunk-diff-line-${type}`,
+    metadata.selected ? 'git-hunk-diff-line-selected' : '',
+  ].join(' ');
+  if (typeof metadata.changeIndex === 'number') {
+    row.dataset.changeIndex = String(metadata.changeIndex);
+  }
 
   const number = document.createElement('span');
   number.className = 'git-hunk-diff-line-number';
@@ -701,7 +869,7 @@ function appendDiffLine(
 
   const prefix = document.createElement('span');
   prefix.className = 'git-hunk-diff-line-prefix';
-  prefix.textContent = type === 'old' ? '-' : '+';
+  prefix.textContent = type === 'old' ? '-' : type === 'new' ? '+' : ' ';
 
   const content = document.createElement('span');
   content.className = 'git-hunk-diff-line-content';
@@ -723,6 +891,19 @@ function appendDiffLine(
 
   row.append(number, prefix, content);
   container.appendChild(row);
+}
+
+function scrollSelectedDiffBodyRowIntoView(body: HTMLElement): void {
+  const selectedRow = body.querySelector('.git-hunk-diff-line-selected') as HTMLElement | null;
+  if (!selectedRow) return;
+
+  const targetTop = Math.max(
+    0,
+    selectedRow.offsetTop - body.offsetTop - HUNK_DIFF_SELECTED_ROW_PADDING_PX
+  );
+  if (!Number.isFinite(targetTop)) return;
+
+  body.scrollTop = targetTop;
 }
 
 function appendEmptyDiffLine(container: HTMLElement): void {
@@ -752,7 +933,10 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-function scrollGitHunkWidgetIntoView(widget: HTMLElement): void {
+function scrollGitHunkWidgetIntoView(
+  widget: HTMLElement,
+  behavior: GitHunkScrollBehavior = 'smooth'
+): void {
   const rect = widget.getBoundingClientRect();
   const viewportHeight =
     window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0;
@@ -768,7 +952,11 @@ function scrollGitHunkWidgetIntoView(widget: HTMLElement): void {
   const duration = gitHunkScrollDurationMs(distance);
 
   if (duration === 0) return;
-  if (prefersReducedMotion() || typeof window.requestAnimationFrame !== 'function') {
+  if (
+    behavior === 'snap' ||
+    prefersReducedMotion() ||
+    typeof window.requestAnimationFrame !== 'function'
+  ) {
     window.scrollTo({ top: targetTop });
     return;
   }
@@ -793,6 +981,8 @@ export interface GitHunkDiffWidgetActions {
   onNext?: () => void;
   onRevert?: (change: GitChangeRange, index: number) => void;
   scrollIntoView?: boolean;
+  scrollBehavior?: GitHunkScrollBehavior;
+  sourceMarkdown?: string;
 }
 
 /**
@@ -856,26 +1046,41 @@ export function renderGitHunkDiffWidget(
   body.className = 'git-hunk-diff-body';
   const oldLines = change.oldLines ?? [];
   const newLines = change.newLines ?? [];
-  const inlineDiffs = computeInlineDiffs(oldLines, newLines);
+  const contextualRows =
+    typeof actions.sourceMarkdown === 'string'
+      ? buildContextualDiffRows(normalizedChanges, selectedIndex, actions.sourceMarkdown)
+      : [];
 
-  for (let index = 0; index < oldLines.length; index += 1) {
-    const lineNumber = typeof change.oldStart === 'number' ? change.oldStart + index : null;
-    appendDiffLine(body, 'old', lineNumber, oldLines[index], inlineDiffs.oldParts[index]);
+  if (contextualRows.length > 0) {
+    for (const row of contextualRows) {
+      appendDiffLine(body, row.type, row.lineNumber, row.text, row.parts, {
+        changeIndex: row.changeIndex,
+        selected: row.selected,
+      });
+    }
+  } else {
+    const inlineDiffs = computeInlineDiffs(oldLines, newLines);
+
+    for (let index = 0; index < oldLines.length; index += 1) {
+      const lineNumber = typeof change.oldStart === 'number' ? change.oldStart + index : null;
+      appendDiffLine(body, 'old', lineNumber, oldLines[index], inlineDiffs.oldParts[index]);
+    }
+
+    for (let index = 0; index < newLines.length; index += 1) {
+      const lineNumber = typeof change.newStart === 'number' ? change.newStart + index : null;
+      appendDiffLine(body, 'new', lineNumber, newLines[index], inlineDiffs.newParts[index]);
+    }
   }
 
-  for (let index = 0; index < newLines.length; index += 1) {
-    const lineNumber = typeof change.newStart === 'number' ? change.newStart + index : null;
-    appendDiffLine(body, 'new', lineNumber, newLines[index], inlineDiffs.newParts[index]);
-  }
-
-  if (oldLines.length === 0 && newLines.length === 0) {
+  if (contextualRows.length === 0 && oldLines.length === 0 && newLines.length === 0) {
     appendEmptyDiffLine(body);
   }
 
   widget.append(header, body);
   root.appendChild(widget);
+  scrollSelectedDiffBodyRowIntoView(body);
   if (actions.scrollIntoView) {
-    scrollGitHunkWidgetIntoView(widget);
+    scrollGitHunkWidgetIntoView(widget, actions.scrollBehavior);
   }
   return widget;
 }

@@ -430,10 +430,8 @@ describe('renderGitHunkDiffWidget', () => {
           endLine: 4,
           oldStart: 4,
           newStart: 4,
-          oldLines: ["Finally, Grasha's eyes snap open, glazed and desperate in the dim light."],
-          newLines: [
-            "Finally, Grasha's eyes snap open, her pupils dilated and tracking erratically in the dim light.",
-          ],
+          oldLines: ['Status marker shows red and slow response.'],
+          newLines: ['Status marker shows blue and fast response.'],
         },
       ],
       0
@@ -446,11 +444,173 @@ describe('renderGitHunkDiffWidget', () => {
       root.querySelectorAll('.git-hunk-diff-line-new .git-hunk-diff-token-changed')
     );
 
-    expect(oldHighlights.map(element => element.textContent)).toEqual(['glazed', 'desperate']);
-    expect(newHighlights.map(element => element.textContent)).toEqual([
-      'her pupils dilated',
-      'tracking erratically',
-    ]);
+    expect(oldHighlights.map(element => element.textContent)).toEqual(['red', 'slow']);
+    expect(newHighlights.map(element => element.textContent)).toEqual(['blue', 'fast']);
+  });
+
+  it('renders neutral source context around the selected hunk when source markdown is available', () => {
+    const sourceMarkdown = [
+      'line 1',
+      'line 2',
+      'line 3',
+      'changed line 4',
+      'line 5',
+      'line 6',
+      'line 7',
+      'line 8',
+    ].join('\n');
+
+    renderGitHunkDiffWidget(
+      root,
+      [
+        {
+          type: 'modified',
+          startLine: 4,
+          endLine: 4,
+          oldStart: 4,
+          newStart: 4,
+          oldLines: ['old line 4'],
+          newLines: ['changed line 4'],
+        },
+      ],
+      0,
+      { sourceMarkdown }
+    );
+
+    const contextLines = Array.from(root.querySelectorAll('.git-hunk-diff-line-context'));
+    const contextText = contextLines.map(
+      element => element.querySelector('.git-hunk-diff-line-content')?.textContent
+    );
+
+    expect(contextText).toEqual(['line 1', 'line 2', 'line 3', 'line 5', 'line 6', 'line 7']);
+    expect(root.querySelector('.git-hunk-diff-body')?.textContent).toContain('old line 4');
+    expect(root.querySelector('.git-hunk-diff-body')?.textContent).toContain('changed line 4');
+  });
+
+  it('includes nearby hunks in the same contextual review peek', () => {
+    const sourceMarkdown = [
+      'line 1',
+      'line 2',
+      'line 3',
+      'changed line 4',
+      'line 5',
+      'line 6',
+      'line 7',
+      'nearby inserted line',
+      'line 9',
+      'line 10',
+      'line 11',
+      'line 12',
+    ].join('\n');
+
+    renderGitHunkDiffWidget(
+      root,
+      [
+        {
+          type: 'modified',
+          startLine: 4,
+          endLine: 4,
+          oldStart: 4,
+          newStart: 4,
+          oldLines: ['old line 4'],
+          newLines: ['changed line 4'],
+        },
+        {
+          type: 'added',
+          startLine: 8,
+          endLine: 8,
+          oldStart: 7,
+          newStart: 8,
+          oldLines: [],
+          newLines: ['nearby inserted line'],
+        },
+      ],
+      0,
+      { sourceMarkdown }
+    );
+
+    const body = root.querySelector('.git-hunk-diff-body') as HTMLElement;
+    const addedLines = Array.from(body.querySelectorAll('.git-hunk-diff-line-new')).map(
+      element => element.querySelector('.git-hunk-diff-line-content')?.textContent
+    );
+
+    expect(root.querySelector('.git-hunk-diff-widget')?.getAttribute('data-change-index')).toBe(
+      '0'
+    );
+    expect(addedLines).toContain('changed line 4');
+    expect(addedLines).toContain('nearby inserted line');
+    expect(body.textContent).toContain('line 11');
+  });
+
+  it('scrolls the contextual peek body to the selected hunk within nearby changes', () => {
+    const originalOffsetTop = Object.getOwnPropertyDescriptor(
+      window.HTMLElement.prototype,
+      'offsetTop'
+    );
+    Object.defineProperty(window.HTMLElement.prototype, 'offsetTop', {
+      configurable: true,
+      get() {
+        if (this instanceof HTMLElement && this.classList.contains('git-hunk-diff-line')) {
+          return Array.from(this.parentElement?.children ?? []).indexOf(this) * 24;
+        }
+        return 0;
+      },
+    });
+
+    try {
+      renderGitHunkDiffWidget(
+        root,
+        [
+          {
+            type: 'modified',
+            startLine: 4,
+            endLine: 4,
+            oldStart: 4,
+            newStart: 4,
+            oldLines: ['old line 4'],
+            newLines: ['changed line 4'],
+          },
+          {
+            type: 'added',
+            startLine: 8,
+            endLine: 8,
+            oldStart: 7,
+            newStart: 8,
+            oldLines: [],
+            newLines: ['nearby inserted line'],
+          },
+        ],
+        1,
+        {
+          sourceMarkdown: [
+            'line 1',
+            'line 2',
+            'line 3',
+            'changed line 4',
+            'line 5',
+            'line 6',
+            'line 7',
+            'nearby inserted line',
+            'line 9',
+            'line 10',
+            'line 11',
+            'line 12',
+          ].join('\n'),
+        }
+      );
+
+      const body = root.querySelector('.git-hunk-diff-body') as HTMLElement;
+      const selectedLine = body.querySelector('.git-hunk-diff-line-selected') as HTMLElement | null;
+
+      expect(selectedLine?.textContent).toContain('nearby inserted line');
+      expect(body.scrollTop).toBeGreaterThan(0);
+    } finally {
+      if (originalOffsetTop) {
+        Object.defineProperty(window.HTMLElement.prototype, 'offsetTop', originalOffsetTop);
+      } else {
+        delete (window.HTMLElement.prototype as unknown as { offsetTop?: number }).offsetTop;
+      }
+    }
   });
 
   it('routes widget actions to the provided callbacks', () => {
@@ -491,11 +651,12 @@ describe('renderGitHunkDiffWidget', () => {
     const originalScrollY = window.scrollY;
     const originalInnerHeight = window.innerHeight;
     const originalGetBoundingClientRect = window.HTMLElement.prototype.getBoundingClientRect;
-    const scrollTo = jest.fn();
-    window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+    const requestAnimationFrame = jest.fn((callback: FrameRequestCallback) => {
       callback((window.performance?.now?.() ?? 0) + 500);
       return 1;
-    };
+    });
+    const scrollTo = jest.fn();
+    window.requestAnimationFrame = requestAnimationFrame;
     window.scrollTo = scrollTo;
     window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
       if (this instanceof HTMLElement && this.classList.contains('git-hunk-diff-widget')) {
@@ -533,6 +694,66 @@ describe('renderGitHunkDiffWidget', () => {
       );
 
       expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number) });
+      expect(requestAnimationFrame).toHaveBeenCalled();
+    } finally {
+      window.requestAnimationFrame = originalRequestAnimationFrame;
+      window.scrollTo = originalScrollTo;
+      window.HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+      Object.defineProperty(window, 'scrollY', { configurable: true, value: originalScrollY });
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('snaps the hunk widget into view when requested by settings', () => {
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const originalScrollTo = window.scrollTo;
+    const originalScrollY = window.scrollY;
+    const originalInnerHeight = window.innerHeight;
+    const originalGetBoundingClientRect = window.HTMLElement.prototype.getBoundingClientRect;
+    const requestAnimationFrame = jest.fn();
+    const scrollTo = jest.fn();
+    window.requestAnimationFrame = requestAnimationFrame;
+    window.scrollTo = scrollTo;
+    window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      if (this instanceof HTMLElement && this.classList.contains('git-hunk-diff-widget')) {
+        return {
+          x: 0,
+          y: 1200,
+          top: 1200,
+          right: 400,
+          bottom: 1280,
+          left: 0,
+          width: 400,
+          height: 80,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      return originalGetBoundingClientRect.call(this);
+    };
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    try {
+      renderGitHunkDiffWidget(
+        root,
+        [
+          {
+            type: 'modified',
+            startLine: 20,
+            endLine: 20,
+            oldLines: ['old'],
+            newLines: ['new'],
+          },
+        ],
+        0,
+        { scrollIntoView: true, scrollBehavior: 'snap' }
+      );
+
+      expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number) });
+      expect(requestAnimationFrame).not.toHaveBeenCalled();
     } finally {
       window.requestAnimationFrame = originalRequestAnimationFrame;
       window.scrollTo = originalScrollTo;

@@ -17,15 +17,22 @@ describe('editor layout CSS', () => {
     expect(css).toContain('--md-content-max-width-default: 999999px;');
     expect(css).toContain('--md-layout-extra-margin: max(');
     expect(css).toContain('var(--md-content-max-width, var(--md-content-max-width-default))');
-    expect(css).toContain(
-      'calc(var(--md-right-layout-margin) + (var(--md-layout-extra-margin) * 0.5))'
-    );
-    expect(css).toContain(
-      'calc(var(--md-left-layout-margin) + (var(--md-layout-extra-margin) * 0.5))'
-    );
+    expect(css).toContain('--md-right-effective-margin: calc(');
+    expect(css).toContain('var(--md-right-layout-margin) + (var(--md-layout-extra-margin) * 0.5)');
+    expect(css).toContain('--md-left-effective-margin: calc(');
+    expect(css).toContain('var(--md-left-layout-margin) + (var(--md-layout-extra-margin) * 0.5)');
+    expect(css).toContain('var(--md-right-effective-margin)');
+    expect(css).toContain('var(--md-left-effective-margin)');
   });
 
   it('does not shadow configured max content width on the editor element', () => {
     expect(css).not.toContain('--md-content-max-width: 999999px;');
+  });
+
+  it('lets Git hunk diff peeks span the full editor viewport', () => {
+    expect(css).toContain('--md-left-effective-margin: calc(');
+    expect(css).toContain('--md-right-effective-margin: calc(');
+    expect(css).toContain('left: calc(-1 * var(--md-left-effective-margin));');
+    expect(css).toContain('right: calc(-1 * var(--md-right-effective-margin));');
   });
 });
