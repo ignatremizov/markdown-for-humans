@@ -17,6 +17,7 @@ import { showTableInsertDialog } from './features/tableInsert';
 import { showLinkDialog } from './features/linkDialog';
 import { showImageInsertDialog } from './features/imageInsertDialog';
 import type { Editor } from '@tiptap/core';
+import { toggleInlineCodeForMarkdown } from './extensions/inlineCodeBacktickShortcut';
 
 // Store reference to refresh function so it can be called externally
 let toolbarRefreshFunction: (() => void) | null = null;
@@ -244,10 +245,11 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       label: 'Inline code',
       title: 'Toggle inline code',
       icon: { name: 'code', fallback: '<>' },
-      action: () => editor.chain().focus().toggleCode().run(),
+      action: () => toggleInlineCodeForMarkdown(editor),
       isActive: () => editor.isActive('code'),
       className: 'code-icon',
       requiresFocus: true,
+      preserveEditorFocus: true,
     },
     {
       type: 'button',

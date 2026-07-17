@@ -50,6 +50,19 @@ describe('createFormattingToolbar', () => {
     expect(boldButton?.getAttribute('aria-label')?.toLowerCase()).toContain('bold');
   });
 
+  it('keeps editor focus when the inline-code button cannot apply formatting', () => {
+    const { editor } = createMockEditor();
+    const toolbar = createFormattingToolbar(editor);
+    const inlineCodeButton = toolbar.querySelector(
+      '.toolbar-button.code-icon'
+    ) as HTMLButtonElement;
+    const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+
+    inlineCodeButton.dispatchEvent(mouseDown);
+
+    expect(mouseDown.defaultPrevented).toBe(true);
+  });
+
   it('toggles active state when updateToolbarStates runs', () => {
     const { editor, isActive } = createMockEditor();
     const toolbar = createFormattingToolbar(editor);
