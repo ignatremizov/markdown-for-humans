@@ -29,6 +29,11 @@ describe('editor layout CSS', () => {
     expect(css).not.toContain('--md-content-max-width: 999999px;');
   });
 
+  it('renders preserved CommonMark prose whitespace as wrapping whitespace', () => {
+    expect(css).toContain('.markdown-editor .markdown-commonmark-whitespace-block');
+    expect(css).toContain('white-space: normal;');
+  });
+
   it('lets Git hunk diff peeks span the full editor viewport', () => {
     expect(css).toContain('--md-left-effective-margin: calc(');
     expect(css).toContain('--md-right-effective-margin: calc(');

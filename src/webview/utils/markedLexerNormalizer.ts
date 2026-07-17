@@ -20,9 +20,20 @@
  *
  * This makes `BlankLinePreservation` (which keys off "space" tokens) work
  * uniformly across all block types.
+ *
+ * The editor keeps Marked's CommonMark soft line endings inside text tokens
+ * when `breaks` is disabled. A ProseMirror decoration renders those characters
+ * as wrapping whitespace without changing their serialized source positions.
  */
 
+import type { MarkedOptions } from 'marked';
+
 type RawToken = { type?: string; raw?: string } & Record<string, unknown>;
+
+export const EDITOR_MARKED_OPTIONS = {
+  gfm: true,
+  breaks: false,
+} satisfies MarkedOptions;
 
 /**
  * Detect link/image inline tokens whose VISIBLE text is empty.

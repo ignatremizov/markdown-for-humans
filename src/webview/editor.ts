@@ -26,6 +26,7 @@ import { TabIndentation } from './extensions/tabIndentation';
 import { GitHubAlerts } from './extensions/githubAlerts';
 import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { InlineCodeBacktickShortcut } from './extensions/inlineCodeBacktickShortcut';
+import { SoftBreakRendering } from './extensions/softBreak';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
@@ -44,7 +45,10 @@ import { createFormattingToolbar, createTableMenu, updateToolbarStates } from '.
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
 import type { BlankLineMode } from '../shared/blankLinePolicy';
 import { overrideClassFor, type EditorThemeSetting } from '../shared/editorTheme';
-import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
+import {
+  EDITOR_MARKED_OPTIONS,
+  installBlankLineLexerNormalizer,
+} from './utils/markedLexerNormalizer';
 import {
   setupImageDragDrop,
   hasPendingImageSaves,
@@ -763,6 +767,7 @@ function initializeEditor(initialContent: string) {
           },
         }),
         MarkdownParagraph, // Custom paragraph with empty-paragraph filtering in renderMarkdown
+        SoftBreakRendering, // Preserve source soft wraps while displaying them as flowing spaces
         CodeBlockWithCopy.configure({
           lowlight,
           HTMLAttributes: {
@@ -776,10 +781,9 @@ function initializeEditor(initialContent: string) {
         RawHtmlBlock,
         Markdown.configure({
           marked,
-          markedOptions: {
-            gfm: true, // GitHub Flavored Markdown for tables, task lists
-            breaks: true, // Preserve single newlines as <br>
-          },
+          // Soft source wraps flow with the reading width; explicit Markdown
+          // hard breaks still arrive as dedicated `br` tokens.
+          markedOptions: EDITOR_MARKED_OPTIONS,
         }),
         HtmlPreservingTable.configure({
           resizable: true,

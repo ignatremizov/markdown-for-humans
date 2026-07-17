@@ -214,6 +214,12 @@
     outline: none;
   }
 
+  /* CommonMark prose whitespace remains in source for fidelity, but tabs,
+     repeated spaces, and soft line endings render as ordinary flowing spaces. */
+  .markdown-editor .markdown-commonmark-whitespace-block {
+    white-space: normal;
+  }
+
   /* Git dirty-diff markers (custom webview equivalent of VS Code gutter/overview hints) */
   #editor.git-change-marker-host {
     position: relative;
