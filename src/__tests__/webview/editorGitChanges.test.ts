@@ -71,7 +71,10 @@ jest.mock('./../../webview/features/imageDragDrop', () => ({
   getPendingImageCount: jest.fn(() => 0),
 }));
 jest.mock('./../../webview/features/tocOverlay', () => ({ toggleTocOverlay: jest.fn() }));
-jest.mock('./../../webview/features/searchOverlay', () => ({ showSearchOverlay: jest.fn() }));
+jest.mock('./../../webview/features/searchOverlay', () => ({
+  disposeSearchOverlay: jest.fn(),
+  showSearchOverlay: jest.fn(),
+}));
 jest.mock('./../../webview/utils/exportContent', () => ({
   collectExportContent: jest.fn(),
   getDocumentTitle: jest.fn(),

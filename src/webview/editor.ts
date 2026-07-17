@@ -55,7 +55,7 @@ import {
   getPendingImageCount,
 } from './features/imageDragDrop';
 import { toggleTocOverlay } from './features/tocOverlay';
-import { showSearchOverlay } from './features/searchOverlay';
+import { disposeSearchOverlay, showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown, writeSelectionMarkdownToClipboard } from './utils/copyMarkdown';
@@ -1219,6 +1219,7 @@ function initializeEditor(initialContent: string) {
 
     // Clean up listeners when editor is destroyed to prevent memory leaks
     editorInstance.on('destroy', () => {
+      disposeSearchOverlay(editorInstance);
       document.removeEventListener('contextmenu', contextMenuHandler);
       document.removeEventListener('click', documentClickHandler);
       document.removeEventListener('keydown', keydownHandler);

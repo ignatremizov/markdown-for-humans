@@ -5,8 +5,9 @@
  */
 
 import { Editor } from '@tiptap/core';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state';
 
 /**
  * Search Overlay - In-document search for Markdown for Humans
@@ -20,20 +21,213 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 
 // Plugin key for search decorations
 const searchPluginKey = new PluginKey('search-highlight');
+const MAX_SEARCH_MATCHES = 10_000;
+const SEARCH_REFRESH_DELAY_MS = 100;
 
 // Search state
 let searchOverlayElement: HTMLElement | null = null;
+let searchOverlayEditor: Editor | null = null;
 let isVisible = false;
 let savedSelection: { from: number; to: number } | null = null;
 let savedScrollPosition: { x: number; y: number } | null = null;
 let currentQuery = '';
 let currentMatches: Array<{ from: number; to: number }> = [];
 let currentMatchIndex = -1;
+let currentMatchOffset = 0;
+let currentBatchHasMore = false;
 let searchPlugin: Plugin | null = null;
+let transactionListenerEditor: Editor | null = null;
+let transactionListener: ((payload: { transaction: Transaction }) => void) | null = null;
+let searchRefreshTimer: number | null = null;
+let pendingActiveMatchPosition: number | null = null;
 let focusRequestId = 0;
 const SCROLL_CHANGE_EPSILON = 1;
 const isOverlayInDom = () =>
   Boolean(searchOverlayElement && document.body.contains(searchOverlayElement));
+
+function flowsSoftBreaks(parent: ProseMirrorNode | null): boolean {
+  return parent?.type.name === 'paragraph' || parent?.type.name === 'heading';
+}
+
+function foldSearchText(text: string): string {
+  return text.toLowerCase().replace(/\u03c2/g, '\u03c3');
+}
+
+const COLLAPSIBLE_PROSE_WHITESPACE_RUN = /[\t\n\f\r ]+/g;
+
+type FoldCheckpoint = {
+  foldedFrom: number;
+  foldedTo: number;
+  sourceFrom: number;
+  sourceTo: number;
+  deltaAfter: number;
+};
+
+type SearchSourceSegment = {
+  sourceFrom: number;
+  documentFrom: number;
+};
+
+type SearchMatch = { from: number; to: number };
+
+export type SearchMatchBatch = {
+  matches: SearchMatch[];
+  hasMore: boolean;
+  offset: number;
+};
+
+type SearchNavigationState = {
+  currentIndex: number;
+  currentOffset: number;
+  currentBatchLength: number;
+  currentBatchHasMore: boolean;
+};
+
+export type SearchNavigationTarget =
+  | { kind: 'current'; index: number }
+  | { kind: 'batch'; offset: number; index: number }
+  | { kind: 'last' };
+
+function foldVisibleSearchRun(
+  sourceText: string,
+  collapseWhitespace: boolean
+): { foldedText: string; checkpoints: FoldCheckpoint[] } {
+  const visibleText = collapseWhitespace
+    ? sourceText.replace(COLLAPSIBLE_PROSE_WHITESPACE_RUN, ' ')
+    : sourceText;
+  const foldedText = foldSearchText(visibleText);
+  const hasCollapsedRun = collapseWhitespace && /[\t\n\f\r ]{2,}/.test(sourceText);
+  const hasExpandingFold = sourceText.includes('\u0130');
+  if (!hasCollapsedRun && !hasExpandingFold) {
+    return { foldedText, checkpoints: [] };
+  }
+
+  let cumulativeDelta = 0;
+  const checkpoints: FoldCheckpoint[] = [];
+  const collapsedRunPattern = /[\t\n\f\r ]{2,}/g;
+  let collapsedRun = hasCollapsedRun ? collapsedRunPattern.exec(sourceText) : null;
+  let expandingFoldOffset = hasExpandingFold ? sourceText.indexOf('\u0130') : -1;
+
+  while (collapsedRun || expandingFoldOffset >= 0) {
+    const collapsedRunOffset = collapsedRun?.index ?? Number.POSITIVE_INFINITY;
+    if (collapsedRunOffset < expandingFoldOffset || expandingFoldOffset < 0) {
+      const sourceLength = collapsedRun?.[0].length ?? 0;
+      const foldedFrom = collapsedRunOffset + cumulativeDelta;
+      cumulativeDelta += 1 - sourceLength;
+      checkpoints.push({
+        foldedFrom,
+        foldedTo: foldedFrom + 1,
+        sourceFrom: collapsedRunOffset,
+        sourceTo: collapsedRunOffset + sourceLength,
+        deltaAfter: cumulativeDelta,
+      });
+      collapsedRun = collapsedRunPattern.exec(sourceText);
+      continue;
+    }
+
+    const foldedFrom = expandingFoldOffset + cumulativeDelta;
+    cumulativeDelta += 1;
+    checkpoints.push({
+      foldedFrom,
+      foldedTo: foldedFrom + 2,
+      sourceFrom: expandingFoldOffset,
+      sourceTo: expandingFoldOffset + 1,
+      deltaAfter: cumulativeDelta,
+    });
+    expandingFoldOffset = sourceText.indexOf('\u0130', expandingFoldOffset + 1);
+  }
+
+  return { foldedText, checkpoints };
+}
+
+function mapFoldedOffset(
+  checkpoints: FoldCheckpoint[],
+  foldedOffset: number,
+  useEnd: boolean
+): number {
+  if (checkpoints.length === 0) {
+    return foldedOffset + (useEnd ? 1 : 0);
+  }
+
+  let low = 0;
+  let high = checkpoints.length - 1;
+  let precedingCheckpoint: FoldCheckpoint | undefined;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const checkpoint = checkpoints[middle];
+    if (checkpoint.foldedFrom <= foldedOffset) {
+      precedingCheckpoint = checkpoint;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+
+  if (
+    precedingCheckpoint &&
+    foldedOffset >= precedingCheckpoint.foldedFrom &&
+    foldedOffset < precedingCheckpoint.foldedTo
+  ) {
+    return useEnd ? precedingCheckpoint.sourceTo : precedingCheckpoint.sourceFrom;
+  }
+
+  const delta = precedingCheckpoint?.deltaAfter ?? 0;
+  return foldedOffset - delta + (useEnd ? 1 : 0);
+}
+
+function mapSourceOffset(segments: SearchSourceSegment[], sourceOffset: number): number {
+  let low = 0;
+  let high = segments.length - 1;
+  let segment = segments[0];
+
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (segments[middle].sourceFrom <= sourceOffset) {
+      segment = segments[middle];
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+
+  return segment.documentFrom + sourceOffset - segment.sourceFrom;
+}
+
+function getVisibleTextBetween(doc: ProseMirrorNode, from: number, to: number): string | null {
+  let text = '';
+  let previousTextEnd: number | null = null;
+  let collapseWhitespace: boolean | null = null;
+  let crossesSearchRun = false;
+
+  doc.descendants((node, position, parent) => {
+    if (!node.isText || !node.text) return true;
+
+    const selectedFrom = Math.max(from, position);
+    const selectedTo = Math.min(to, position + node.text.length);
+    if (selectedFrom >= selectedTo) return true;
+
+    if (previousTextEnd !== null && selectedFrom > previousTextEnd) {
+      crossesSearchRun = true;
+    }
+
+    const flowsWhitespace = flowsSoftBreaks(parent);
+    if (collapseWhitespace !== null && collapseWhitespace !== flowsWhitespace) {
+      crossesSearchRun = true;
+    }
+    collapseWhitespace = flowsWhitespace;
+
+    const selectedText = node.text.slice(selectedFrom - position, selectedTo - position);
+    if (!flowsWhitespace && selectedText.includes('\n')) {
+      crossesSearchRun = true;
+    }
+    text += selectedText;
+    previousTextEnd = selectedTo;
+    return true;
+  });
+
+  if (crossesSearchRun) return null;
+  return collapseWhitespace ? text.replace(COLLAPSIBLE_PROSE_WHITESPACE_RUN, ' ') : text;
+}
 
 function getWindowScrollPosition(): { x: number; y: number } {
   return {
@@ -91,35 +285,234 @@ function createSearchPlugin(): Plugin {
   });
 }
 
-/**
- * Find all matches in the document
- */
-export function findMatches(editor: Editor, query: string): Array<{ from: number; to: number }> {
+function visitSearchMatches(
+  editor: Editor,
+  query: string,
+  visitor: (match: SearchMatch, index: number) => boolean
+): number {
   if (!query || query.length === 0) {
-    return [];
+    return 0;
   }
 
-  const matches: Array<{ from: number; to: number }> = [];
+  let matchCount = 0;
+  let stopped = false;
   const doc = editor.state.doc;
-  const lowerQuery = query.toLowerCase();
+  const foldedQuery = foldSearchText(query);
+  let runSourceText = '';
+  let runSourceSegments: SearchSourceSegment[] = [];
+  let runCollapsesWhitespace = false;
+  let expectedNextPosition: number | null = null;
 
-  doc.descendants((node, pos) => {
-    if (node.isText && node.text) {
-      const text = node.text.toLowerCase();
-      let index = 0;
-
-      while ((index = text.indexOf(lowerQuery, index)) !== -1) {
-        matches.push({
-          from: pos + index,
-          to: pos + index + query.length,
-        });
-        index += 1; // Move forward to find overlapping matches
-      }
+  const flushRun = () => {
+    const { foldedText, checkpoints } = foldVisibleSearchRun(runSourceText, runCollapsesWhitespace);
+    if (foldedText.length < foldedQuery.length) {
+      runSourceText = '';
+      runSourceSegments = [];
+      runCollapsesWhitespace = false;
+      expectedNextPosition = null;
+      return false;
     }
+
+    let index = 0;
+    while ((index = foldedText.indexOf(foldedQuery, index)) !== -1) {
+      const finalIndex = index + foldedQuery.length - 1;
+      const sourceFrom = mapFoldedOffset(checkpoints, index, false);
+      const sourceTo = mapFoldedOffset(checkpoints, finalIndex, true);
+      const match = {
+        from: mapSourceOffset(runSourceSegments, sourceFrom),
+        to: mapSourceOffset(runSourceSegments, sourceTo),
+      };
+      const shouldContinue = visitor(match, matchCount);
+      matchCount += 1;
+      if (!shouldContinue) {
+        stopped = true;
+        break;
+      }
+      index += 1;
+    }
+
+    runSourceText = '';
+    runSourceSegments = [];
+    runCollapsesWhitespace = false;
+    expectedNextPosition = null;
+    return stopped;
+  };
+
+  doc.descendants((node, pos, parent) => {
+    if (stopped) return false;
+    if (!node.isText || !node.text) {
+      flushRun();
+      return true;
+    }
+
+    const collapseWhitespace = flowsSoftBreaks(parent);
+    if (
+      expectedNextPosition !== null &&
+      (pos !== expectedNextPosition || collapseWhitespace !== runCollapsesWhitespace)
+    ) {
+      flushRun();
+      if (stopped) return false;
+    }
+
+    const text = node.text;
+    if (runSourceText.length === 0) {
+      runCollapsesWhitespace = collapseWhitespace;
+    }
+    runSourceSegments.push({
+      sourceFrom: runSourceText.length,
+      documentFrom: pos,
+    });
+    runSourceText += text;
+    expectedNextPosition = pos + text.length;
+    return true;
+  });
+  if (!stopped) {
+    flushRun();
+  }
+
+  return matchCount;
+}
+
+/**
+ * Find a bounded match batch beginning after a known number of matches.
+ */
+export function findMatchBatch(
+  editor: Editor,
+  query: string,
+  skipMatches = 0,
+  keepLastBatch = false
+): SearchMatchBatch {
+  let matches: SearchMatch[] = [];
+  let totalMatches = 0;
+  let hasMore = false;
+
+  visitSearchMatches(editor, query, (match, index) => {
+    totalMatches = index + 1;
+    if (keepLastBatch) {
+      if (matches.length < MAX_SEARCH_MATCHES) {
+        matches.push(match);
+      } else {
+        matches[index % MAX_SEARCH_MATCHES] = match;
+      }
+      return true;
+    }
+    if (index < skipMatches) {
+      return true;
+    }
+    if (matches.length >= MAX_SEARCH_MATCHES) {
+      hasMore = true;
+      return false;
+    }
+    matches.push(match);
     return true;
   });
 
-  return matches;
+  if (keepLastBatch && totalMatches > MAX_SEARCH_MATCHES) {
+    const firstMatchIndex = totalMatches % MAX_SEARCH_MATCHES;
+    matches = [...matches.slice(firstMatchIndex), ...matches.slice(0, firstMatchIndex)];
+  }
+
+  return {
+    matches,
+    hasMore: keepLastBatch ? false : hasMore,
+    offset: keepLastBatch ? Math.max(0, totalMatches - matches.length) : skipMatches,
+  };
+}
+
+function findMatchBatchNearPosition(
+  editor: Editor,
+  query: string,
+  targetPosition: number
+): { batch: SearchMatchBatch; activeIndex: number } {
+  let nearestMatchIndex = -1;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  visitSearchMatches(editor, query, (match, index) => {
+    const distance =
+      targetPosition < match.from
+        ? match.from - targetPosition
+        : targetPosition > match.to
+          ? targetPosition - match.to
+          : 0;
+    if (distance <= nearestDistance) {
+      nearestDistance = distance;
+      nearestMatchIndex = index;
+    }
+
+    return match.from <= targetPosition || distance < nearestDistance;
+  });
+
+  if (nearestMatchIndex < 0) {
+    return {
+      batch: { matches: [], hasMore: false, offset: 0 },
+      activeIndex: -1,
+    };
+  }
+
+  const offset = Math.floor(nearestMatchIndex / MAX_SEARCH_MATCHES) * MAX_SEARCH_MATCHES;
+  return {
+    batch: findMatchBatch(editor, query, offset),
+    activeIndex: nearestMatchIndex - offset,
+  };
+}
+
+function findLastMatchBatch(editor: Editor, query: string): SearchMatchBatch {
+  return findMatchBatch(editor, query, 0, true);
+}
+
+/**
+ * Resolve next-match navigation without scanning or mutating editor state.
+ */
+export function resolveNextSearchNavigation(state: SearchNavigationState): SearchNavigationTarget {
+  const { currentIndex, currentOffset, currentBatchLength, currentBatchHasMore } = state;
+
+  if (currentIndex === currentBatchLength - 1 && currentBatchHasMore) {
+    return {
+      kind: 'batch',
+      offset: currentOffset + currentBatchLength,
+      index: 0,
+    };
+  }
+  if (currentIndex === currentBatchLength - 1 && currentOffset > 0) {
+    return { kind: 'batch', offset: 0, index: 0 };
+  }
+  return {
+    kind: 'current',
+    index: (currentIndex + 1) % currentBatchLength,
+  };
+}
+
+/**
+ * Resolve previous-match navigation across arbitrary bounded batch offsets.
+ */
+export function resolvePreviousSearchNavigation(
+  state: SearchNavigationState
+): SearchNavigationTarget {
+  const { currentIndex, currentOffset, currentBatchLength, currentBatchHasMore } = state;
+
+  if (currentIndex === 0 && currentOffset > 0) {
+    const previousGlobalIndex = currentOffset - 1;
+    const previousBatchOffset = Math.max(0, currentOffset - MAX_SEARCH_MATCHES);
+    return {
+      kind: 'batch',
+      offset: previousBatchOffset,
+      index: previousGlobalIndex - previousBatchOffset,
+    };
+  }
+  if (currentIndex === 0 && currentBatchHasMore) {
+    return { kind: 'last' };
+  }
+  return {
+    kind: 'current',
+    index: (currentIndex - 1 + currentBatchLength) % currentBatchLength,
+  };
+}
+
+/**
+ * Find the first bounded batch of matches in the document.
+ */
+export function findMatches(editor: Editor, query: string): Array<{ from: number; to: number }> {
+  return findMatchBatch(editor, query).matches;
 }
 
 /**
@@ -167,6 +560,86 @@ function clearSearchDecorations(editor: Editor) {
   }
 }
 
+function clearScheduledSearchRefresh() {
+  if (searchRefreshTimer !== null) {
+    window.clearTimeout(searchRefreshTimer);
+    searchRefreshTimer = null;
+  }
+  pendingActiveMatchPosition = null;
+}
+
+function resetSearchMatches() {
+  currentQuery = '';
+  currentMatches = [];
+  currentMatchIndex = -1;
+  currentMatchOffset = 0;
+  currentBatchHasMore = false;
+}
+
+function loadSearchBatch(editor: Editor, offset: number) {
+  const batch = findMatchBatch(editor, currentQuery, offset);
+  currentMatches = batch.matches;
+  currentMatchOffset = batch.offset;
+  currentBatchHasMore = batch.hasMore;
+}
+
+function loadLastSearchBatch(editor: Editor) {
+  const batch = findLastMatchBatch(editor, currentQuery);
+  currentMatches = batch.matches;
+  currentMatchOffset = batch.offset;
+  currentBatchHasMore = false;
+}
+
+function refreshSearchAfterDocumentChange(editor: Editor, mappedActivePosition: number | null) {
+  if (!isVisible || currentQuery.length === 0 || searchOverlayEditor !== editor) return;
+
+  if (mappedActivePosition === null) {
+    loadSearchBatch(editor, currentMatchOffset);
+    if (currentMatches.length === 0 && currentMatchOffset > 0) {
+      loadSearchBatch(editor, 0);
+    }
+    currentMatchIndex = 0;
+  } else {
+    const anchoredMatch = findMatchBatchNearPosition(editor, currentQuery, mappedActivePosition);
+    currentMatches = anchoredMatch.batch.matches;
+    currentMatchOffset = anchoredMatch.batch.offset;
+    currentBatchHasMore = anchoredMatch.batch.hasMore;
+    currentMatchIndex = anchoredMatch.activeIndex;
+  }
+
+  if (currentMatches.length === 0) {
+    currentMatchIndex = -1;
+  }
+
+  applySearchDecorations(editor, currentMatches, currentMatchIndex);
+  const searchInput = searchOverlayElement?.querySelector(
+    '.search-overlay-input'
+  ) as HTMLInputElement | null;
+  if (searchInput) {
+    updateMatchCounter(searchInput);
+  }
+}
+
+function scheduleSearchRefresh(editor: Editor, transaction: Transaction) {
+  if (!isVisible || currentQuery.length === 0 || !transaction.docChanged) return;
+
+  const activeMatch = currentMatches[currentMatchIndex];
+  const activePosition =
+    searchRefreshTimer === null ? (activeMatch?.from ?? null) : pendingActiveMatchPosition;
+  pendingActiveMatchPosition =
+    activePosition === null ? null : transaction.mapping.map(activePosition, 1);
+
+  if (searchRefreshTimer !== null) {
+    window.clearTimeout(searchRefreshTimer);
+  }
+  searchRefreshTimer = window.setTimeout(() => {
+    const mappedActivePosition = pendingActiveMatchPosition;
+    searchRefreshTimer = null;
+    pendingActiveMatchPosition = null;
+    refreshSearchAfterDocumentChange(editor, mappedActivePosition);
+  }, SEARCH_REFRESH_DELAY_MS);
+}
+
 /**
  * Ensure search plugin is registered
  */
@@ -176,6 +649,16 @@ function ensureSearchPlugin(editor: Editor) {
   if (!existingPlugin) {
     searchPlugin = createSearchPlugin();
     editor.registerPlugin(searchPlugin);
+  }
+
+  if (transactionListenerEditor !== editor) {
+    if (transactionListenerEditor && transactionListener) {
+      transactionListenerEditor.off('transaction', transactionListener);
+    }
+    clearScheduledSearchRefresh();
+    transactionListener = payload => scheduleSearchRefresh(editor, payload.transaction);
+    editor.on('transaction', transactionListener);
+    transactionListenerEditor = editor;
   }
 }
 
@@ -231,7 +714,9 @@ function updateMatchCounter(searchInput: HTMLInputElement) {
     counter.classList.add('no-results');
     searchInput.classList.add('no-results');
   } else if (currentMatches.length > 0) {
-    counter.textContent = `${currentMatchIndex + 1} of ${currentMatches.length}`;
+    const ordinal = currentMatchOffset + currentMatchIndex + 1;
+    const knownMatchCount = currentMatchOffset + currentMatches.length;
+    counter.textContent = `${ordinal} of ${knownMatchCount}${currentBatchHasMore ? '+' : ''}`;
     counter.classList.remove('no-results');
     searchInput.classList.remove('no-results');
   } else {
@@ -245,8 +730,9 @@ function updateMatchCounter(searchInput: HTMLInputElement) {
  * Perform search and update UI
  */
 function performSearch(editor: Editor, query: string) {
+  clearScheduledSearchRefresh();
   currentQuery = query;
-  currentMatches = findMatches(editor, query);
+  loadSearchBatch(editor, 0);
   currentMatchIndex = currentMatches.length > 0 ? 0 : -1;
 
   applySearchDecorations(editor, currentMatches, currentMatchIndex);
@@ -270,7 +756,17 @@ function performSearch(editor: Editor, query: string) {
 function goToNextMatch(editor: Editor) {
   if (currentMatches.length === 0) return;
 
-  currentMatchIndex = (currentMatchIndex + 1) % currentMatches.length;
+  const target = resolveNextSearchNavigation({
+    currentIndex: currentMatchIndex,
+    currentOffset: currentMatchOffset,
+    currentBatchLength: currentMatches.length,
+    currentBatchHasMore,
+  });
+  if (target.kind === 'batch') {
+    loadSearchBatch(editor, target.offset);
+  }
+  currentMatchIndex = target.kind === 'last' ? currentMatches.length - 1 : target.index;
+  if (currentMatchIndex < 0) return;
   applySearchDecorations(editor, currentMatches, currentMatchIndex);
   scrollToMatch(editor, currentMatches[currentMatchIndex]);
 
@@ -288,7 +784,18 @@ function goToNextMatch(editor: Editor) {
 function goToPreviousMatch(editor: Editor) {
   if (currentMatches.length === 0) return;
 
-  currentMatchIndex = (currentMatchIndex - 1 + currentMatches.length) % currentMatches.length;
+  const target = resolvePreviousSearchNavigation({
+    currentIndex: currentMatchIndex,
+    currentOffset: currentMatchOffset,
+    currentBatchLength: currentMatches.length,
+    currentBatchHasMore,
+  });
+  if (target.kind === 'batch') {
+    loadSearchBatch(editor, target.offset);
+  } else if (target.kind === 'last') {
+    loadLastSearchBatch(editor);
+  }
+  currentMatchIndex = target.kind === 'last' ? currentMatches.length - 1 : target.index;
   applySearchDecorations(editor, currentMatches, currentMatchIndex);
   scrollToMatch(editor, currentMatches[currentMatchIndex]);
 
@@ -435,6 +942,7 @@ export function createSearchOverlay(editor: Editor): HTMLElement {
 
   document.body.appendChild(overlay);
   searchOverlayElement = overlay;
+  searchOverlayEditor = editor;
 
   return overlay;
 }
@@ -492,6 +1000,18 @@ function focusSearchInput(selectText = true) {
  * Show the search overlay
  */
 export function showSearchOverlay(editor: Editor): void {
+  if (searchOverlayEditor && searchOverlayEditor !== editor) {
+    clearScheduledSearchRefresh();
+    clearSearchDecorations(searchOverlayEditor);
+    searchOverlayElement?.remove();
+    searchOverlayElement = null;
+    searchOverlayEditor = null;
+    isVisible = false;
+    resetSearchMatches();
+    savedSelection = null;
+    savedScrollPosition = null;
+  }
+
   // Ensure search plugin is registered
   ensureSearchPlugin(editor);
   const wasVisible = isVisible && isOverlayInDom();
@@ -509,7 +1029,7 @@ export function showSearchOverlay(editor: Editor): void {
   savedScrollPosition = getWindowScrollPosition();
 
   // Get selected text as initial query
-  const selectedText = editor.state.doc.textBetween(from, to, ' ');
+  const selectedText = getVisibleTextBetween(editor.state.doc, from, to);
 
   // Show overlay
   searchOverlayElement.classList.add('visible');
@@ -541,6 +1061,7 @@ export function showSearchOverlay(editor: Editor): void {
 export function hideSearchOverlay(editor: Editor, restorePosition = true): void {
   if (!searchOverlayElement) return;
 
+  const activeEditor = searchOverlayEditor ?? editor;
   const hadActiveMatch = currentMatches.length > 0 && currentMatchIndex >= 0;
   const shouldPreventFocusScroll = restorePosition && hasScrolledSinceSearchOpened();
 
@@ -548,12 +1069,11 @@ export function hideSearchOverlay(editor: Editor, restorePosition = true): void 
   isVisible = false;
 
   // Clear search state
-  currentQuery = '';
-  currentMatches = [];
-  currentMatchIndex = -1;
+  clearScheduledSearchRefresh();
+  resetSearchMatches();
 
   // Clear decorations
-  clearSearchDecorations(editor);
+  clearSearchDecorations(activeEditor);
 
   // Clear input
   const searchInput = searchOverlayElement.querySelector(
@@ -578,13 +1098,38 @@ export function hideSearchOverlay(editor: Editor, restorePosition = true): void 
   // back to the stale cursor location from before find opened.
   if (restorePosition && !hadActiveMatch && !shouldPreventFocusScroll && savedSelection) {
     try {
-      editor.commands.setTextSelection(savedSelection);
+      activeEditor.commands.setTextSelection(savedSelection);
     } catch {
       // Ignore errors restoring position
     }
   }
 
-  focusEditor(editor, shouldPreventFocusScroll);
+  focusEditor(activeEditor, shouldPreventFocusScroll);
+  savedSelection = null;
+  savedScrollPosition = null;
+}
+
+/**
+ * Release overlay state owned by an editor before its TipTap view is destroyed.
+ */
+export function disposeSearchOverlay(editor: Editor): void {
+  clearScheduledSearchRefresh();
+  focusRequestId += 1;
+
+  if (transactionListenerEditor === editor && transactionListener) {
+    transactionListenerEditor.off('transaction', transactionListener);
+    transactionListenerEditor = null;
+    transactionListener = null;
+  }
+
+  if (searchOverlayEditor !== editor) return;
+
+  clearSearchDecorations(editor);
+  searchOverlayElement?.remove();
+  searchOverlayElement = null;
+  searchOverlayEditor = null;
+  isVisible = false;
+  resetSearchMatches();
   savedSelection = null;
   savedScrollPosition = null;
 }

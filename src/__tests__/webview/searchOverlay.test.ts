@@ -54,10 +54,14 @@ jest.mock('@tiptap/pm/state', () => {
 
 import type { Editor } from '@tiptap/core';
 import {
+  disposeSearchOverlay,
+  findMatchBatch,
   findMatches,
   showSearchOverlay,
   hideSearchOverlay,
   isSearchVisible,
+  resolveNextSearchNavigation,
+  resolvePreviousSearchNavigation,
 } from '../../webview/features/searchOverlay';
 
 type MockEditor = {
@@ -80,6 +84,8 @@ type MockEditor = {
     };
   };
   registerPlugin: jest.Mock;
+  on: jest.Mock;
+  off: jest.Mock;
 };
 
 // Minimal DOM + editor mocks for UI behavior tests
@@ -135,6 +141,8 @@ function createMockEditorWithView(text: string): MockEditor {
     registerPlugin: jest.fn((plugin: { key?: string; props?: Record<string, unknown> }) => {
       state.plugins.push(plugin);
     }),
+    on: jest.fn(),
+    off: jest.fn(),
   };
 }
 
@@ -242,11 +250,141 @@ describe('Search Overlay', () => {
       expect(result).toHaveLength(1);
     });
 
+    it('should match a visible space across a preserved soft source wrap', () => {
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) =>
+              callback({ isText: true, text: 'Alpha\nbeta' }, 1, {
+                type: { name: 'paragraph' },
+              }),
+          },
+        },
+      };
+
+      expect(findMatches(editor as unknown as Editor, 'alpha beta')).toEqual([{ from: 1, to: 11 }]);
+    });
+
+    it('matches CommonMark-collapsed prose whitespace and maps it to the full source run', () => {
+      const text = 'Alpha  beta\tgamma\nnext';
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) =>
+              callback({ isText: true, text }, 1, {
+                type: { name: 'paragraph' },
+              }),
+          },
+        },
+      };
+
+      expect(findMatches(editor as unknown as Editor, 'alpha beta gamma next')).toEqual([
+        { from: 1, to: text.length + 1 },
+      ]);
+      expect(findMatches(editor as unknown as Editor, 'alpha  beta')).toEqual([]);
+    });
+
+    it('preserves literal code-block newlines in the search text model', () => {
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) =>
+              callback({ isText: true, text: 'foo\nbar' }, 1, {
+                type: { name: 'codeBlock' },
+              }),
+          },
+        },
+      };
+
+      expect(findMatches(editor as unknown as Editor, 'foo bar')).toEqual([]);
+      expect(findMatches(editor as unknown as Editor, 'foo\nbar')).toEqual([{ from: 1, to: 8 }]);
+    });
+
+    it('should match visible text across contiguous marked text nodes', () => {
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (node: { isText: boolean; text: string }, pos: number) => boolean
+            ) => {
+              callback({ isText: true, text: 'Alpha ' }, 1);
+              callback({ isText: true, text: 'beta' }, 7);
+              return true;
+            },
+          },
+        },
+      };
+
+      expect(findMatches(editor as unknown as Editor, 'alpha beta')).toEqual([{ from: 1, to: 11 }]);
+    });
+
+    it('collapses a whitespace run split across contiguous marked text nodes', () => {
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) => {
+              const parent = { type: { name: 'paragraph' } };
+              callback({ isText: true, text: 'Alpha ' }, 1, parent);
+              callback({ isText: true, text: ' beta' }, 7, parent);
+              return true;
+            },
+          },
+        },
+      };
+
+      expect(findMatches(editor as unknown as Editor, 'alpha beta')).toEqual([{ from: 1, to: 12 }]);
+    });
+
     it('should handle unicode characters', () => {
       const editor = createMockEditor('Hello 世界');
       const result = findMatches(editor as any, '世界');
 
       expect(result).toHaveLength(1);
+    });
+
+    it('maps expanding Unicode case folds back to one source character', () => {
+      const editor = createMockEditor('İstanbul');
+
+      expect(findMatches(editor as unknown as Editor, 'İ')).toEqual([{ from: 1, to: 2 }]);
+    });
+
+    it('applies context-sensitive Unicode case folding across the complete text run', () => {
+      const editor = createMockEditor('ΟΣ');
+
+      expect(findMatches(editor as unknown as Editor, 'ος')).toEqual([{ from: 1, to: 3 }]);
+      expect(findMatches(editor as unknown as Editor, 'ΟΣ')).toEqual([{ from: 1, to: 3 }]);
+    });
+
+    it('treats medial and final Greek sigma as the same case-folded character', () => {
+      const wordEditor = createMockEditor('ΟΣ');
+      const letterEditor = createMockEditor('Σ');
+
+      expect(findMatches(wordEditor as unknown as Editor, 'οσ')).toEqual([{ from: 1, to: 3 }]);
+      expect(findMatches(letterEditor as unknown as Editor, 'ς')).toEqual([{ from: 1, to: 2 }]);
     });
 
     it('should handle emoji in text', () => {
@@ -300,6 +438,120 @@ describe('Search Overlay', () => {
       expect(result).toHaveLength(1000);
     });
 
+    it('searches a 10,000-line prose block within the interaction budget', () => {
+      const text = Array.from({ length: 10_000 }, () => 'a'.repeat(79)).join('\n');
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) => callback({ isText: true, text }, 1, { type: { name: 'paragraph' } }),
+          },
+        },
+      };
+      const startedAt = performance.now();
+
+      expect(findMatches(editor as unknown as Editor, 'not-present')).toEqual([]);
+      expect(performance.now() - startedAt).toBeLessThan(50);
+    });
+
+    it('keeps a rare expanding fold sparse in a 10,000-line prose block', () => {
+      const text = `${'İ'}${Array.from({ length: 10_000 }, () => 'a'.repeat(79)).join('\n')}`;
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) => callback({ isText: true, text }, 1, { type: { name: 'paragraph' } }),
+          },
+        },
+      };
+      const startedAt = performance.now();
+
+      expect(findMatches(editor as unknown as Editor, 'not-present')).toEqual([]);
+      expect(performance.now() - startedAt).toBeLessThan(50);
+    });
+
+    it('searches dense collapsed whitespace within the interaction budget', () => {
+      const text = Array.from({ length: 10_000 }, () => 'alpha  beta').join('\n');
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) => callback({ isText: true, text }, 1, { type: { name: 'paragraph' } }),
+          },
+        },
+      };
+      const startedAt = performance.now();
+
+      expect(findMatches(editor as unknown as Editor, 'not-present')).toEqual([]);
+      expect(performance.now() - startedAt).toBeLessThan(50);
+    });
+
+    it('searches many contiguous marked segments and matches within the interaction budget', () => {
+      const segmentCount = 10_000;
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) => {
+              for (let index = 0; index < segmentCount; index += 1) {
+                callback({ isText: true, text: 'a' }, index + 1, {
+                  type: { name: 'paragraph' },
+                });
+              }
+              return true;
+            },
+          },
+        },
+      };
+      const startedAt = performance.now();
+
+      expect(findMatches(editor as unknown as Editor, 'a')).toHaveLength(segmentCount);
+      expect(performance.now() - startedAt).toBeLessThan(50);
+    });
+
+    it('caps a common query before it can allocate unbounded matches', () => {
+      const editor = {
+        state: {
+          doc: {
+            descendants: (
+              callback: (
+                node: { isText: boolean; text: string },
+                pos: number,
+                parent: { type: { name: string } }
+              ) => boolean
+            ) =>
+              callback({ isText: true, text: 'a'.repeat(100_000) }, 1, {
+                type: { name: 'paragraph' },
+              }),
+          },
+        },
+      };
+      const startedAt = performance.now();
+
+      expect(findMatches(editor as unknown as Editor, 'a')).toHaveLength(10_000);
+      expect(performance.now() - startedAt).toBeLessThan(50);
+    });
+
     it('should handle special regex characters safely', () => {
       const editor = createMockEditor('Hello [world] (test) {foo}');
 
@@ -340,6 +592,72 @@ describe('Search Overlay UI behaviors', () => {
     const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
     expect(input).toBeTruthy();
     expect(document.activeElement).toBe(input);
+  });
+
+  it('uses collapsed visible whitespace when seeding Find from selected prose', () => {
+    const text = 'Beta  gamma\tdelta\nnext';
+    editor.state.selection = { from: 1, to: text.length + 1 };
+    editor.state.doc.descendants.mockImplementation(callback =>
+      callback({ isText: true, text }, 1, {
+        type: { name: 'paragraph' },
+      })
+    );
+
+    showSearchOverlay(editor as unknown as Editor);
+
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    expect(input.value).toBe('Beta gamma delta next');
+    expect(editor.commands.setTextSelection).toHaveBeenCalledWith({
+      from: 1,
+      to: text.length + 1,
+    });
+  });
+
+  it.each([
+    [
+      'paragraphs',
+      [
+        { text: 'Alpha', pos: 1, parent: 'paragraph' },
+        { text: 'Beta', pos: 8, parent: 'paragraph' },
+      ],
+    ],
+    [
+      'an explicit hard break',
+      [
+        { text: 'Alpha', pos: 1, parent: 'paragraph' },
+        { text: 'Beta', pos: 7, parent: 'paragraph' },
+      ],
+    ],
+    ['multiline code', [{ text: 'Alpha\nBeta', pos: 1, parent: 'codeBlock' }]],
+  ])('does not seed a Find query across %s', (_case, textNodes) => {
+    editor.state.selection = { from: 1, to: 12 };
+    editor.state.doc.descendants.mockImplementation(callback => {
+      textNodes.forEach(({ text, pos, parent }) => {
+        callback({ isText: true, text }, pos, { type: { name: parent } });
+      });
+      return true;
+    });
+
+    showSearchOverlay(editor as unknown as Editor);
+
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
+  });
+
+  it('seeds a Find query across contiguous marked text nodes', () => {
+    editor.state.selection = { from: 1, to: 11 };
+    editor.state.doc.descendants.mockImplementation(callback => {
+      callback({ isText: true, text: 'Alpha ' }, 1, { type: { name: 'paragraph' } });
+      callback({ isText: true, text: 'Beta' }, 7, { type: { name: 'paragraph' } });
+      return true;
+    });
+
+    showSearchOverlay(editor as unknown as Editor);
+
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    expect(input.value).toBe('Alpha Beta');
+    expect(editor.commands.setTextSelection).toHaveBeenCalledWith({ from: 1, to: 11 });
   });
 
   it('keeps the search overlay open and refocuses the input when shown again', () => {
@@ -445,6 +763,244 @@ describe('Search Overlay UI behaviors', () => {
     const secondSelection = editor.commands.setTextSelection.mock.calls.at(-1)?.[0];
     expect(secondSelection?.from).toBeGreaterThan(firstSelection.from);
     expect(document.activeElement).toBe(input);
+  });
+
+  it('recomputes visible matches after the document changes without scrolling', () => {
+    editor.state.selection = { from: 0, to: 0 };
+    editor.state.doc.textBetween.mockReturnValue('');
+    editor.state.doc.descendants.mockImplementation(callback =>
+      callback({ isText: true, text: 'foo' }, 1, {
+        type: { name: 'paragraph' },
+      })
+    );
+    showSearchOverlay(editor as unknown as Editor);
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    input.value = 'foo';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('1 of 1');
+
+    editor.commands.setTextSelection.mockClear();
+    editor.state.doc.descendants.mockImplementation(callback =>
+      callback({ isText: true, text: 'foo bar foo' }, 1, {
+        type: { name: 'paragraph' },
+      })
+    );
+    const transactionListener = editor.on.mock.calls.find(
+      ([event]) => event === 'transaction'
+    )?.[1];
+    expect(transactionListener).toBeDefined();
+
+    jest.useFakeTimers();
+    try {
+      transactionListener({
+        transaction: {
+          docChanged: true,
+          mapping: { map: (position: number) => position },
+        },
+      });
+
+      expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('1 of 1');
+      expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
+
+      jest.runOnlyPendingTimers();
+
+      expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('1 of 2');
+      expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps a later-batch active match anchored when earlier matches are inserted', () => {
+    editor.state.selection = { from: 0, to: 0 };
+    editor.state.doc.textBetween.mockReturnValue('');
+    editor.state.doc.descendants.mockImplementation(callback =>
+      callback({ isText: true, text: 'a'.repeat(20_001) }, 1, {
+        type: { name: 'paragraph' },
+      })
+    );
+    showSearchOverlay(editor as unknown as Editor);
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    input.value = 'a';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const previous = document.querySelector(
+      '.search-overlay-btn[title^="Previous"]'
+    ) as HTMLButtonElement;
+    previous.click();
+
+    expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('20001 of 20001');
+    expect(editor.commands.setTextSelection).toHaveBeenLastCalledWith({
+      from: 20_001,
+      to: 20_002,
+    });
+
+    editor.commands.setTextSelection.mockClear();
+    editor.state.doc.descendants.mockImplementation(callback =>
+      callback({ isText: true, text: 'a'.repeat(25_001) }, 1, {
+        type: { name: 'paragraph' },
+      })
+    );
+    const transactionListener = editor.on.mock.calls.find(
+      ([event]) => event === 'transaction'
+    )?.[1];
+    expect(transactionListener).toBeDefined();
+
+    jest.useFakeTimers();
+    try {
+      transactionListener({
+        transaction: {
+          docChanged: true,
+          mapping: { map: (position: number) => position + 5_000 },
+        },
+      });
+      jest.runOnlyPendingTimers();
+
+      expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('25001 of 25001');
+      expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
+
+      const next = document.querySelector(
+        '.search-overlay-btn[title^="Next"]'
+      ) as HTMLButtonElement;
+      next.click();
+      expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('1 of 10000+');
+      expect(editor.commands.setTextSelection).toHaveBeenLastCalledWith({
+        from: 1,
+        to: 2,
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('rebinds overlay controls when the editor instance is recreated', () => {
+    editor.state.selection = { from: 0, to: 0 };
+    editor.state.doc.textBetween.mockReturnValue('');
+    showSearchOverlay(editor as unknown as Editor);
+
+    const replacementEditor = createMockEditorWithView('replacement replacement');
+    replacementEditor.state.selection = { from: 0, to: 0 };
+    replacementEditor.state.doc.textBetween.mockReturnValue('');
+    editor.commands.setTextSelection.mockClear();
+
+    showSearchOverlay(replacementEditor as unknown as Editor);
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    input.value = 'replacement';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(editor.off).toHaveBeenCalledWith('transaction', expect.any(Function));
+    expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
+    expect(replacementEditor.commands.setTextSelection).toHaveBeenCalledWith({
+      from: 1,
+      to: 12,
+    });
+
+    hideSearchOverlay(replacementEditor as unknown as Editor, false);
+  });
+
+  it('disposes overlay controls and transaction listeners with the editor', () => {
+    showSearchOverlay(editor as unknown as Editor);
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    input.value = 'hello';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    disposeSearchOverlay(editor as unknown as Editor);
+
+    expect(document.querySelector('.search-overlay')).toBeNull();
+    expect(isSearchVisible()).toBe(false);
+    expect(editor.off).toHaveBeenCalledWith('transaction', expect.any(Function));
+  });
+
+  it('reports bounded batches honestly and navigates across them in both directions', () => {
+    const text = 'a'.repeat(10_001);
+    editor.state.selection = { from: 0, to: 0 };
+    editor.state.doc.textBetween.mockReturnValue('');
+    editor.state.doc.descendants.mockImplementation(callback =>
+      callback({ isText: true, text }, 1, {
+        type: { name: 'paragraph' },
+      })
+    );
+    showSearchOverlay(editor as unknown as Editor);
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    input.value = 'a';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('1 of 10000+');
+
+    const previous = document.querySelector(
+      '.search-overlay-btn[title^="Previous"]'
+    ) as HTMLButtonElement;
+    const next = document.querySelector('.search-overlay-btn[title^="Next"]') as HTMLButtonElement;
+    previous.click();
+    expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('10001 of 10001');
+    expect(editor.commands.setTextSelection).toHaveBeenLastCalledWith({
+      from: 10_001,
+      to: 10_002,
+    });
+
+    previous.click();
+    expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('10000 of 10001');
+
+    next.click();
+
+    expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('10001 of 10001');
+    expect(editor.commands.setTextSelection).toHaveBeenLastCalledWith({
+      from: 10_001,
+      to: 10_002,
+    });
+
+    next.click();
+    expect(document.querySelector('.search-overlay-counter')?.textContent).toBe('1 of 10000+');
+  });
+
+  it('resolves non-aligned navigation boundaries across more than two match batches', () => {
+    const text = 'a'.repeat(25_003);
+    const denseEditor = createMockEditorWithView(text);
+    const firstBatch = findMatchBatch(denseEditor as unknown as Editor, 'a');
+    const middleBatch = findMatchBatch(denseEditor as unknown as Editor, 'a', 5_003);
+    const lastBatch = findMatchBatch(denseEditor as unknown as Editor, 'a', 15_003);
+
+    expect(firstBatch.matches[0]).toEqual({ from: 1, to: 2 });
+    expect(firstBatch.hasMore).toBe(true);
+    expect(middleBatch.matches[0]).toEqual({ from: 5_004, to: 5_005 });
+    expect(middleBatch.matches.at(-1)).toEqual({ from: 15_003, to: 15_004 });
+    expect(middleBatch.hasMore).toBe(true);
+    expect(lastBatch.matches[0]).toEqual({ from: 15_004, to: 15_005 });
+    expect(lastBatch.matches.at(-1)).toEqual({ from: 25_003, to: 25_004 });
+    expect(lastBatch.hasMore).toBe(false);
+
+    expect(
+      resolvePreviousSearchNavigation({
+        currentIndex: 0,
+        currentOffset: 15_003,
+        currentBatchLength: 10_000,
+        currentBatchHasMore: false,
+      })
+    ).toEqual({ kind: 'batch', offset: 5_003, index: 9_999 });
+    expect(
+      resolvePreviousSearchNavigation({
+        currentIndex: 0,
+        currentOffset: 5_003,
+        currentBatchLength: 10_000,
+        currentBatchHasMore: true,
+      })
+    ).toEqual({ kind: 'batch', offset: 0, index: 5_002 });
+
+    expect(
+      resolveNextSearchNavigation({
+        currentIndex: 9_999,
+        currentOffset: 5_003,
+        currentBatchLength: 10_000,
+        currentBatchHasMore: true,
+      })
+    ).toEqual({ kind: 'batch', offset: 15_003, index: 0 });
+    expect(
+      resolveNextSearchNavigation({
+        currentIndex: 9_999,
+        currentOffset: 15_003,
+        currentBatchLength: 10_000,
+        currentBatchHasMore: false,
+      })
+    ).toEqual({ kind: 'batch', offset: 0, index: 0 });
   });
 
   it('keeps the current match selected when closing after a search', () => {
