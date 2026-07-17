@@ -42,7 +42,7 @@ export const CustomImage = Image.extend({
 | `inline: false` (default) | Each image is a block node | Creates phantom gaps between consecutive images |
 | `inline: true` | Images live inside paragraphs | No gaps, provides clean flow for consecutive images |
 
-**Key insight:** With `breaks: true` in Markdown config, consecutive image lines with trailing spaces (`![](img)  \n`) create hardBreaks between images. With block-level images, these become editable gaps. With inline images, they remain inside the same paragraph.
+**Key insight:** Explicit trailing spaces (`![](img)  \n`) create hardBreaks between consecutive image lines even though ordinary soft-wrapped prose flows as one paragraph. With block-level images, these become editable gaps. With inline images, they remain inside the same paragraph.
 
 ### NodeView Structure
 

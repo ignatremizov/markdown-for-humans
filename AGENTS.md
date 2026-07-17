@@ -59,6 +59,21 @@
 | Document Sync | Full replacement | Simpler, VS Code handles internal diffing |
 | Body Font | Serif (Charter/Georgia) | Prose, not code; matches premium editors |
 
+### Intentional Markdown Canonicalization
+
+- This policy applies only when the user explicitly removes code-block
+  formatting and converts a code block to prose. Opening, rendering, editing,
+  saving, reopening, or exporting content that remains a fenced code block
+  preserves its literal whitespace unchanged.
+- During that explicit code-to-prose conversion, trim leading and trailing
+  blank code lines and canonicalize each run of multiple internal blank code
+  lines to one prose paragraph boundary.
+- This is intentional: stable parse, serialize, reopen, undo, and redo behavior
+  takes precedence over preserving the exact number of blank lines during a
+  structural code-to-prose conversion.
+- Reviewers must not report exact preservation of repeated blank code lines as
+  a defect unless this policy is explicitly changed.
+
 ---
 
 ## Detailed Guides (Load When Needed)

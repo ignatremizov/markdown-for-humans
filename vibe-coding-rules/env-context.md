@@ -30,7 +30,8 @@
               │    • StarterKit (formatting)  │
               │    • Markdown (serialization) │
               │    • Tables, TaskList, Link   │
-              │    • Custom: Mermaid, Image   │
+              │    • Custom: Mermaid, Image,  │
+              │      source soft-wrap display │
               │                               │
               │    BubbleMenuView (toolbar)   │
               └───────────────────────────────┘
@@ -93,6 +94,8 @@ New features often follow this pattern:
 3. **Add toolbar button** in `BubbleMenuView.ts` (if UI needed)
 4. **Wire messages** in `MarkdownEditorProvider.ts` (if extension-side logic needed)
 5. **Add command** in `package.json` contributes (if command palette entry needed)
+
+`SoftBreakRendering` is a block-level extension: it preserves source newlines, tabs, and repeated spaces inside prose while rendering them with CommonMark whitespace flow. Keep its decoration count proportional to affected blocks, never to whitespace-run count.
 
 ---
 
